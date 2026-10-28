@@ -1,0 +1,24 @@
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行期产物（绝不入库：含候选人数据）
+boss-work/
+/tmp/boss/
+*.xlsx
+*.jsonl
+review_batch_*.json
+review_ok_*.json
+known_fav*.json
+strict3v2_*.json
+daily_state.json
+STOP_TODAY
+REST_UNTIL
+
+# 截图与页面 dump
+*.png
+*.jpg
+*.jpeg
+dump-*.json
+card*.html

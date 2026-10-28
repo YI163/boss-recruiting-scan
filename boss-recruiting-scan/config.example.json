@@ -1,0 +1,14 @@
+{
+  "_comment": "scan-favorite.mjs 会读取本文件（SKILL_CONFIG 或 skill 根目录 config.json）。口径不在本文件：口径硬编码在 scripts/judge.py（见 references/criteria.md）。",
+  "pacing": {
+    "cycleSleepMs": 18000,
+    "favoriteGapMs": 12500,
+    "dailyFavoriteCap": 60,
+    "dailyCycleCap": 200,
+    "maxContinuousMinutes": 180
+  },
+  "batch": {
+    "reviewEvery": 5,
+    "tabs": ["推荐", "最新"]
+  }
+}

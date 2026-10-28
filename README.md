@@ -19,7 +19,15 @@ BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP �
 
 ## 安装
 
-把 `boss-recruiting-scan/` 整个目录放进你的 skill 目录即可（目录名就是 skill 名）：
+```bash
+git clone https://github.com/YI163/boss-recruiting-scan.git            # 官方
+git clone https://gh-proxy.com/https://github.com/YI163/boss-recruiting-scan.git   # 国内镜像，git 可用（实测 3.4s）
+# 只取文件：curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/refs/heads/main
+```
+
+`gh-proxy.com` 不通时换 `ghproxy.net`；长期只读镜像可在 Gitee「从 GitHub 导入」。clone 后**不需要** npm/pip 装任何依赖。
+
+然后把 `boss-recruiting-scan/` 整个目录放进你的 skill 目录即可（目录名就是 skill 名；不放也能直接 `node scripts/...` 跑）：
 
 ```bash
 # DSH
@@ -37,17 +45,18 @@ Copy-Item .\boss-recruiting-scan "$env:USERPROFILE\.dsh\skills\" -Recurse -Force
 ## 快速开始
 
 ```bash
-# 1) 起一个带调试端口的独立 Chrome，并在里面登录一次招聘账号
+# 1) 起一个带调试端口的独立 Chrome，并在里面登录一次招聘账号（登录时选「我要招聘」）
 #    macOS
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
   --user-data-dir=$HOME/.boss-prof --remote-debugging-port=9333 \
-  https://www.zhipin.com/web/chat/recommend
+  https://www.zhipin.com/web/chat/index
 #    Windows
 & "C:\Program Files\Google\Chrome\Application\chrome.exe" `
   --user-data-dir="$env:USERPROFILE\.boss-prof" --remote-debugging-port=9333 `
-  https://www.zhipin.com/web/chat/recommend
+  https://www.zhipin.com/web/chat/index
+#    受管终端（DSH 等）用 start-detached.ps1 脱离启动，否则命令一结束 Chrome 就被带走、9333 消失
 
-# 2) 确认连上了
+# 2) 确认连上了（看 url / frames / login / loginDetail）
 node scripts/cdp.mjs state
 
 # 3) 离线自检（无需浏览器）
@@ -60,9 +69,14 @@ FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1 1
 # 5) 正式：≤150 轮，收藏满 5 人自动停轮交审（exit 42）
 node scripts/scan-favorite.mjs 150 5
 
-# 6) 审核后写 review_ok_1.json 再继续；出台账
-python scripts/make_ledger.py --work "$BOSS_WORK" --out . --title 招聘筛人台账
+# 6) 审核后写 review_ok_1.json；只想接受审批用 --accept-only（不连浏览器、不再收藏人）
+node scripts/scan-favorite.mjs --accept-only
+
+# 7) 出台账（不传 --out 就写到 $BOSS_WORK）
+python scripts/make_ledger.py --work "$BOSS_WORK" --title 招聘筛人台账
 ```
+
+> **默认判定器不是通用口径**：`judge.py` 依赖卡片起止日期，BOSS 推荐卡多数没有日期 → 真实卡上常 `0 PASS`（实测 14 张真卡 0 PASS）。第一次用请按 `judge_template.py` 改写口径。
 
 Windows 上的解释器、路径与冒烟验收见 [`boss-recruiting-scan/README-windows.md`](boss-recruiting-scan/README-windows.md)；
 完整安装说明见 [`boss-recruiting-scan/README.md`](boss-recruiting-scan/README.md)。
@@ -86,9 +100,18 @@ Windows 上的解释器、路径与冒烟验收见 [`boss-recruiting-scan/README
 
 三份文档，按遇到问题的类型看：
 
-- [`references/troubleshooting.md`](boss-recruiting-scan/references/troubleshooting.md) —— 白屏三因、卡住四因、点空三层（含实测像素偏差）、闸门卡住、为什么扩展桥不能收藏、Windows 专属结论。
+- [`references/troubleshooting.md`](boss-recruiting-scan/references/troubleshooting.md) —— 白屏三因、卡住四因、点空三层（含实测像素偏差）、闸门卡住、为什么扩展桥不能收藏、Windows 专属结论，以及第七节「新人外测暴露的入门层缺口」。
 - [`README-windows.md`](boss-recruiting-scan/README-windows.md) —— Windows 上 Chrome 136+ 禁默认 profile 调试、App-Bound Encryption 让登录态搬不动等硬约束。
 - [`HANDOVER.md`](boss-recruiting-scan/HANDOVER.md) —— 交接说明与目录约定。
+
+## 最近修复：一次外部实测的 24 条缺口
+
+有人只拿这个仓库、在干净沙盒里从零跑了两轮，交出 24 条缺口（2 Blocker + 13 Major + 9 Minor）。结论是**执行层结实、入门层漏三处**：取仓库（国内网络）、起常驻 Chrome（受管终端）、默认口径（真实卡 0 PASS）。已修：
+
+- 文档：取仓库三路径（官方 / `gh-proxy.com` / zip）、脱离启动、**登录选「我要招聘」**、自检顺序、PowerShell 编码、默认口径警告、核对收藏只认 `this_round`、卡片「期望城市」不可信。
+- 代码：`cdp.mjs` 的 `login` 判据（旧版登录成功也报 false）、新增 `navigate`、`cards` 在收藏页回退、`shot` 用 `fromSurface:false`；收藏顺序真的按判定器排序（此前 changelog 声称已实现、代码仍按 DOM 顺序）；新增 `--accept-only` 且接受早于配额检查；`--batch` 批号防重；`--rollback` 加就绪轮询并回退账本；`make_ledger.py` 默认输出目录与本地时区；`favcapture.mjs` 区分本轮与历史。
+
+改动细节见 `boss-recruiting-scan/SKILL.md` 的「版本」段（**本地补丁 3**）。
 
 ## 目录结构
 

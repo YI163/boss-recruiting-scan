@@ -7,6 +7,16 @@
 
 安装位置：`C:\Users\<you>\.dsh\skills\boss-recruiting-scan`（`<skill>` 下文都指这个目录）。
 
+拿代码（国内网络三选一，`clone` 后**不需要**装任何 npm/pip 依赖）：
+
+```powershell
+git clone https://github.com/YI163/boss-recruiting-scan.git
+git clone https://gh-proxy.com/https://github.com/YI163/boss-recruiting-scan.git   # 镜像（实测 3.4s）
+curl.exe -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/refs/heads/main
+```
+
+`gh-proxy.com` 不通时换 `ghproxy.net`（时好时坏）；只读镜像可在 Gitee「从 GitHub 导入」。
+
 ---
 
 ## 1. 起一个带调试端口的 Chrome
@@ -15,10 +25,18 @@
 & "C:\Program Files\Google\Chrome\Application\chrome.exe" `
   --user-data-dir="$env:USERPROFILE\.boss-prof" `
   --remote-debugging-port=9333 `
-  https://www.zhipin.com/web/chat/recommend
+  https://www.zhipin.com/web/chat/index
 ```
 
-- 必须用**独立 user-data-dir**（不碰日常主窗口），首次要在这个实例里登录 BOSS 直聘。
+> **受管终端（DSH 等）必须脱离启动**，否则命令一结束 Chrome 被连带杀掉、9333 消失：
+> ```powershell
+> powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\tools\start-detached.ps1" `
+>   -Path "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+>   -Arguments "--user-data-dir=$env:USERPROFILE\.boss-prof --remote-debugging-port=9333 --no-first-run --no-default-browser-check --new-window https://www.zhipin.com/web/chat/index"
+> ```
+> 没有该脚本时用 `Invoke-CimMethod -ClassName Win32_Process -MethodName Create` 等价启动。
+
+- 必须用**独立 user-data-dir**（不碰日常主窗口），首次要在这个实例里登录 BOSS 直聘，**登录时选「我要招聘」**再扫码/输验证码（落到求职端首页是扫不出招聘端的）。Chrome 136+ 不允许默认 profile 开调试端口，Windows 上也不能靠复制 cookie 搬登录态（v20 App-Bound Encryption 会删掉解不开的 cookie）。
 - 检查端口是否真的在听：
 
 ```powershell
@@ -53,6 +71,8 @@ Stop-Process -Id <Pid>
 ## 3. 环境变量（每开一个新 PowerShell 都要设）
 
 ```powershell
+chcp 65001 | Out-Null
+$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8   # 中文不乱码
 $env:CDP_URL    = 'http://127.0.0.1:9333'
 $env:BOSS_WORK  = "$env:USERPROFILE\boss-work"        # 建议放用户目录，见 §6 隐私
 $env:PYTHON_BIN = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
@@ -87,6 +107,8 @@ $env:FAV_DRY_RUN = '1'                                 # 只判定不点收藏�
 
 第 5 条是本次修复的核心：旧版在 Windows 上会直接 `ENOENT: mkdtemp '/tmp/boss-judgecheck-…'`。
 
+> 两个常见误判：①首次 `cdp.mjs shot` 可能拍到**全白**（页面还没渲染完）→ 等 8 秒重拍，别据此判断页面坏了；②`cdp.mjs state` 的 `login` 旧版按推荐帧里的「退出登录」文本判定，登录成功也报 `false`；本地补丁 3 起改为「顶层 DOM + URL `/web/user/` + cookie `wt2=`」三处判定，`login:false` 时看同条输出的 `loginDetail`。
+
 真实判定链路（不经浏览器）也可以先跑通再动页面：
 
 ```powershell
@@ -117,8 +139,11 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 - **缩放**：坐标点是 CSS 像素，Chrome 窗口保持最大化、缩放 100% 时最稳；改窗口宽度后按钮坐标由 `clientWidth` 动态算出，无须手工调。
 - **额度**：日收藏 ≤60、轮次 ≤200、连续运行 ≤180 分钟——Windows 上同样硬夹，env/config 只能更严。
 - **首次运行**会提示 `未找到 config.json，使用内置默认值`；要改节奏从 `config.example.json` 复制成 `config.json`（配额只能调小）。
+- **默认判定器不是通用口径**：`judge.py` 依赖卡片起止日期，而 BOSS 推荐卡多数没有日期 → 真实卡上常 `0 PASS`（实测 14 张 0 PASS）。第一次用请按 `scripts/judge_template.py` 改写口径，别把 `0 PASS` 当结论。
 
 ## 7. 本地补丁清单（相对 zip 内的 v1.8.2）
+
+**补丁 1（Windows 适配）**
 
 | 文件 | 改动 | 为什么 |
 |---|---|---|
@@ -128,11 +153,15 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 | `SKILL.md` | 前置条件/环境变量/已知坑补 Windows 说明与版本记录条目 | 避免下次照 macOS 文档踩坑 |
 | `README-windows.md` | 本文件 | — |
 
+**补丁 2（点收藏链路）**：开卡/收藏/关闭全部改**元素点击 + 控件文案自证**（推荐帧内 `.row.name-wrap`、`.like-icon-and-text`、`.close-btn`），魔法坐标只作兜底；浮层判据改为「最后一个非 `v-leave` 的 `.boss-popup__wrapper`」并清理卡死节点。旧坐标实测横偏 44px、关闭钮偏 99px，是「点了没反应/点歪」的根因。
+
+**补丁 3（新人外测 24 条）**：`cdp.mjs` 修 `login` 判据、新增 `navigate <url>`、`cards` 在收藏页回退读 `.card-item`、`shot` 用 `fromSurface:false`；`scan-favorite.mjs` 收藏顺序真正按判定器排序（原来按 DOM 顺序）、新增 `--accept-only` 且接受早于配额检查、`--batch` 批号取最大值、`--rollback` 就绪轮询 + 回退 `state.favorites`/`pendingRecords`/`passes.jsonl`；`make_ledger.py` 的 `--out` 默认 `$BOSS_WORK`、时间转本地、缺 openpyxl 给修法；`favcapture.mjs` 区分本轮与历史。文档补齐取仓库三路径、脱离启动、招聘端登录、自检顺序、编码、默认口径 0 PASS 警告。
+
 **回滚**：重新解压原始 zip 覆盖 `<skill>` 目录即可（本补丁没有新增运行时状态文件，`BOSS_WORK` 里的数据不受影响）。换回 macOS/Linux 使用也无需回滚——POSIX 分支保持上游原值。
 
 ## 8. 不变的铁律（与平台无关）
 
 - **零外联**：只点「收藏」和关浮层，绝不「打招呼 / 联系Ta / 搜索畅聊卡」。
-- 每累计 5 个收藏 `exit 42` 停轮审核；`review_ok_N.json` 必须覆盖全部候选，被拒者先 `--rollback`。
+- 每累计 5 个收藏 `exit 42` 停轮审核；`review_ok_N.json` 必须覆盖全部候选，被拒者先 `--rollback`；只想接受审批（不再收藏人）用 `node scripts/scan-favorite.mjs --accept-only`。
 - 发现登录失效 / 安全验证 / 操作频繁 / 收藏失败率 >50% → 截图 + 写 `STOP_TODAY` + 非零退出，当天不再跑。
 - 姓名只落掩码（`张**`），不导出手机号/微信/邮箱。

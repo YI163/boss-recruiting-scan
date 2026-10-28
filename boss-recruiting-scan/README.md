@@ -1,11 +1,21 @@
-# boss-recruiting-scan（v1.8.1）
+# boss-recruiting-scan（v1.8.2 + 本地补丁 3）
 
 > 已知边界：候选人姓名在 BOSS 端是掩码（`张**`），**同姓+同年龄**的两个人可能互相误伤（回滚会清同名键、拒绝会跳过同名同岁）。遇到这种情况请用真实姓名回滚并在台账里人工核对；判定器已改为按卡片文本去重（不再按 姓名/年龄/期望 合并）。
  — 5 分钟上手
 
 在 BOSS 直聘**招聘端**「推荐牛人」页按你的口径批量筛人，只点「收藏」、零外联，每 5 人停轮交审，最后出 xlsx 台账。流程与节奏是固定的（防封），**不要改**。
 
-> 详细规则看 `SKILL.md`；换岗位/换条件看 `references/custom-criteria.md`；交接/交接给同事看 `HANDOVER.md`。
+> 详细规则看 `SKILL.md`；换岗位/换条件看 `references/custom-criteria.md`；白屏/卡住/点空的成因看 `references/troubleshooting.md`；Windows 环境看 `README-windows.md`；交接给同事看 `HANDOVER.md`。
+
+## 拿到代码（国内网络三选一）
+
+```bash
+git clone https://github.com/YI163/boss-recruiting-scan.git                        # 官方（能连就用这个）
+git clone https://gh-proxy.com/https://github.com/YI163/boss-recruiting-scan.git   # 镜像，git 可用（实测 3.4s）
+curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/refs/heads/main   # 只取文件
+```
+
+镜像挂了换 `ghproxy.net`；长期只读镜像可在 Gitee「从 GitHub 导入」。clone 到任意目录都能直接 `node scripts/...` 跑；想被 skill 系统自动发现则放进 `~/.dsh/skills/`。**不需要 npm/pip 安装任何依赖。**
 
 ## 0. 环境（macOS，实测路径）
 
@@ -14,6 +24,8 @@
 | Node ≥ 22 | 可能不在 PATH：`/usr/bin/env node` 找不到时用 `$HOME/.dsh/node/bin/node`（先 `export PATH="$HOME/.dsh/node/bin:$PATH"`） |
 | Python 3 | 台账要 xlsx 时需要 openpyxl；系统 `python3` 没有就用 `/Users/wangjie/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python3` |
 | Chrome | 用**调试端口的副本实例**，不要动你正在用的窗口 |
+
+> **默认判定器不是通用口径**：`judge.py` 内置「长沙优先 / 英语 A 级 / 教学或大厂经历月数」，依赖卡片里的起止日期；BOSS 推荐卡多数没有日期，真实卡上常 **0 PASS**（实测 14 张真卡 0 PASS）。第一次用请按 `scripts/judge_template.py` 改写口径，详见 `SKILL.md` 的 Step 0。
 
 ## 1. 起一个带调试端口的 Chrome（不碰主窗口）
 
@@ -65,11 +77,11 @@ node scripts/scan-favorite.mjs 150 5
 
 # ⑤ 审核：脚本输出 review_batch_1.json；审核后写 review_ok_1.json（见下）
 #    被拒的人先回滚：node scripts/scan-favorite.mjs --rollback "真实姓名"
+#    只想接受审批（不再收藏人、不连浏览器）：node scripts/scan-favorite.mjs --accept-only
 
-# ⑥ 出台账（用带 openpyxl 的解释器；--out 别写 "."，会写到当前目录/只读安装目录）
+# ⑥ 出台账（用带 openpyxl 的解释器；不传 --out 就写到 $BOSS_WORK）
 export PY=/Users/wangjie/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python3
-mkdir -p "$BOSS_WORK/ledger"
-"$PY" scripts/make_ledger.py --work "$BOSS_WORK" --out "$BOSS_WORK/ledger" --title 招聘筛人台账-$(date +%Y%m%d)
+"$PY" scripts/make_ledger.py --work "$BOSS_WORK" --title 招聘筛人台账-$(date +%Y%m%d)
 ```
 
 审核文件格式（必须覆盖 **全部候选**，approved + rejected 不重叠）：
@@ -84,16 +96,18 @@ mkdir -p "$BOSS_WORK/ledger"
 
 | 命令 | 作用 |
 |---|---|
-| `node scripts/cdp.mjs state` / `cards` / `shot` | 诊断：帧结构 / 列表卡片 / 截图 |
+| `node scripts/cdp.mjs state` / `cards` / `shot` | 诊断：帧结构 / 列表卡片 / 截图（`state` 里 `login`+`loginDetail` 才是登录判据） |
+| `node scripts/cdp.mjs navigate "https://www.zhipin.com/web/chat/recommend"` | 换页（v1.8.2 本地补丁 3 新增） |
 | `node scripts/scan-favorite.mjs 150 5` | 主流程（轮数 / 收藏目标） |
 | `node scripts/scan-favorite.mjs --batch` | 不足 5 人时手动结批（写 review_batch，exit 42） |
-| `node scripts/scan-favorite.mjs --rollback "真实姓名"` | 取消收藏并清理 known_fav（拒绝 card_id；全未命中时按 §4.1 用 known-cleanup） |
+| `node scripts/scan-favorite.mjs --accept-only` | 只接受 `review_ok_N.json`（不连浏览器、不再收藏任何人） |
+| `node scripts/scan-favorite.mjs --rollback "真实姓名"` | 取消收藏 + 清理 known_fav + 回退账本（拒绝 card_id；全未命中时按 §4.1 用 known-cleanup） |
 | `node scripts/known-cleanup.mjs "$BOSS_WORK" "张**\|32" "张伟 32岁"` | 手工取消收藏后清理 known 残留 |
 | `node scripts/scan-favorite.mjs --judge-run cards.jsonl` | 只跑判定（不连浏览器，会覆盖 BOSS_WORK 的判定输出） |
 | `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（**不要**改成 `reviewEvery` 去调闸门频率，铁律固定每 5 人） |
 | `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 1` | 联调：只判定不收藏 |
-| `node scripts/favcapture.mjs` | 抓「互动→收藏牛人」列表（姓名掩码） |
-| `python3 scripts/make_ledger.py --work $BOSS_WORK --out .` | 台账 xlsx + md |
+| `node scripts/favcapture.mjs` | 抓收藏列表，区分 `this_round`（本轮）与 `historical_count`（历史） |
+| `python3 scripts/make_ledger.py --work $BOSS_WORK` | 台账 xlsx + md（`--out` 默认就是 `$BOSS_WORK`） |
 
 ## 4. 退出码
 

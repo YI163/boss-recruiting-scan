@@ -25,10 +25,27 @@ import glob
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 # 默认工作目录：macOS/Linux 仍是 /tmp/boss；Windows 用 %TEMP%\boss（与 scan-favorite.mjs 一致）
 DEFAULT_WORK = os.path.join(tempfile.gettempdir(), 'boss') if os.name == 'nt' else '/tmp/boss'
+
+
+def local_ts(v):
+    """把 JSON 里的 UTC ISO 时间串转成本机本地时间显示（台账列标「本地时间」）。
+
+    以前直接把 UTC 原串塞进台账/日志，和本地时间列摆在一起会对不上（审计缺口 D23）。
+    """
+    if not v:
+        return ''
+    try:
+        s = str(v).replace('Z', '+00:00')
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return str(v)
 
 try:
     from openpyxl import Workbook
@@ -74,9 +91,12 @@ def key_of(x):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--work', default=os.environ.get('BOSS_WORK') or DEFAULT_WORK)
-    ap.add_argument('--out', default='.')
+    # 默认输出到工作目录（BOSS_WORK），不再默默写进当前目录（审计缺口 D21）
+    ap.add_argument('--out', default=None)
     ap.add_argument('--title', default='招聘筛人台账-' + datetime.now().strftime('%Y%m%d'))
     args = ap.parse_args()
+    if not args.out:
+        args.out = os.environ.get('BOSS_WORK') or DEFAULT_WORK
     os.makedirs(args.out, exist_ok=True)
 
     # 口径列名（换口径后可用 ledger_config.json 覆盖，避免贴错标签）
@@ -165,7 +185,7 @@ def main():
     ok_sorted = sorted(ok, key=lambda y: (city_rank(y), -(y.get('c3_months') or 0), str(y.get('name') or '')))
 
     md = ['# %s' % args.title, '',
-          '- 生成时间：%s' % datetime.now().strftime('%Y-%m-%d %H:%M'),
+          '- 生成时间：%s（本地时间）' % datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z'),
           '- 判定通过：**%d** 人；收藏成功事件：**%d**；审核批次：%d' % (len(ok), len(favs), len(batch_rows)),
           '- 列名：%s / %s / %s（可用 ledger_config.json 覆盖）' % (labels['c1'], labels['c2'], labels['c3']), '']
 
@@ -185,11 +205,11 @@ def main():
             ws.column_dimensions[c].width = w
 
         ws2 = wb.create_sheet('收藏记录')
-        ws2.append(['时间', 'card_id', '姓名(掩码)', '年龄', '结果', 'state'])
+        ws2.append(['时间(本地)', 'card_id', '姓名(掩码)', '年龄', '结果', 'state'])
         for c in ws2[1]:
             c.font = bold
         for r in favs:
-            ws2.append([r.get('ts', ''), r.get('card_id'), r.get('name_masked'), r.get('age'), r.get('action'), r.get('state')])
+            ws2.append([local_ts(r.get('ts')), r.get('card_id'), r.get('name_masked'), r.get('age'), r.get('action'), r.get('state')])
 
         ws3 = wb.create_sheet('审核批次')
         ws3.append(['批次', '声明人数', '候选数', 'approved', 'rejected', '状态'])
@@ -223,7 +243,7 @@ def main():
     md.append('')
     md.append('## 收藏记录（%d）' % len(favs))
     for r in favs:
-        md.append('- %s %s %s岁 %s' % (r.get('ts', '')[:16], r.get('name_masked'), r.get('age'), r.get('action')))
+        md.append('- %s %s %s岁 %s' % (local_ts(r.get('ts')), r.get('name_masked'), r.get('age'), r.get('action')))
     md.append('')
     md.append('## 审核批次（%d）' % len(batch_rows))
     for b in batch_rows:
@@ -235,7 +255,9 @@ def main():
     os.chmod(out_md, 0o600)
     print('saved', out_md)
     if not HAVE_OPENPYXL:
-        print('WARN: openpyxl missing, xlsx not generated（用带 openpyxl 的解释器：见 README「环境」）')
+        print('WARN: 当前解释器没有 openpyxl，只生成了 .md，没有 .xlsx。')
+        print('      修法：换一个装了 openpyxl 的解释器重跑（例：pip install openpyxl，或用 DSH 自带 python），')
+        print('      或显式指定：PYTHON_BIN=<带 openpyxl 的 python> 后重跑同一命令。')
 
 
 if __name__ == '__main__':

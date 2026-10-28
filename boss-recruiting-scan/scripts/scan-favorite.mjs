@@ -4,6 +4,8 @@
 //   node scan-favorite.mjs [cycles] [favTarget]             正常跑（默认 150 / 5）
 //   FAV_DRY_RUN=1 node scan-favorite.mjs 2 1                只判定不点收藏（联调）
 //   node scan-favorite.mjs --rollback "真实姓名或card_id,..."  取消收藏
+//   node scan-favorite.mjs --batch                           把攒够的待审记录手动结批（exit 42）
+//   node scan-favorite.mjs --accept-only                     只接受上一批审核结果（不采集、不收藏、不连 CDP）
 // 环境变量：CDP_URL BOSS_WORK PYTHON_BIN JUDGE_PY SPACING FAV_GAP APPLY_FILTER SKILL_CONFIG
 // 硬约束（代码 clamp，env/config 只能更严不能更松）：轮间隔 ≥15s；收藏间隔 ≥12s；
 //   日收藏 ≤60；日轮次 ≤200；连续运行 ≤3h；遇验证/登录失效立即停并锁当天。
@@ -79,6 +81,8 @@ const appendJSONL = (p, obj) => fs.appendFileSync(p, JSON.stringify(obj) + '\n',
 // ---------- 状态与启动闸门 ----------
 const todayStr = localDay()
 const MODE = process.argv[2] === '--rollback' || process.argv[2] === '--batch'
+// 只接受上一批审核结果：不采集、不收藏、不需要 CDP，也不受停线/配额影响
+const ACCEPT_ONLY = process.argv[2] === '--accept-only'
 // 判定器单次运行（调试/CI 用；不读 daily_state、不受停线影响）
 if (process.argv[2] === '--judge-run') {
   const cardsFile = process.argv[3]
@@ -109,21 +113,17 @@ if (fs.existsSync(restPath)) { const u = Number((fs.readFileSync(restPath, 'utf8
 const quotaHit = state.favorites >= DAILY_FAV_CAP ? 'DAILY_FAV_CAP(' + state.favorites + ')'
   : state.cycles >= DAILY_CYCLE_CAP ? 'DAILY_CYCLE_CAP(' + state.cycles + ')'
   : (state.startedAt ? (Date.now() - state.startedAt > MAX_RUN_MS ? 'RUN_LIMIT' : null) : null)
-if (MODE) {
-  // 纠正模式：撤回误点/结批不受停线与配额影响（auditor X1）
-  if (stopHit || restHit || quotaHit) console.log('注意：存在停止/配额状态（' + (stopHit ? 'STOP_TODAY' : restHit ? 'REST_UNTIL' : quotaHit) + '），--rollback/--batch 仍允许执行')
-} else {
-  if (stopHit) { console.log('STOP_TODAY: 今天已因风险信号停止'); process.exit(2) }
-  if (restHit) { console.log('REST_UNTIL 未到，休息中：', new Date(restHit).toISOString()); process.exit(2) }
-  if (quotaHit) { console.log(quotaHit, '已达上限'); process.exit(2) }
-}
+// 注意：停线/配额检查被移到了「接受上一批审核结果」之后（见文件下方）。
+// 顺序反了会出现：当天收藏到顶 → 先被 RUN_LIMIT 拦下 → 最后一批永远结不清（审计缺口 D16）。
 
 // 中断恢复：已有满 5 条待审记录但没生成 batch（上次在 closeOverlay/退出时被打断）
 if (!MODE && !FAV_DRY_RUN && !state.pendingBatch && state.pendingRecords.length >= REVIEW_EVERY) {
   writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
 }
-// 审核闸门：未审的 batch 必须先审核（校验 digest 与 approved ids），否则拒绝继续
-if (!MODE && state.pendingBatch && !FAV_DRY_RUN) {
+// 审核闸门：未审的 batch 必须先审核（校验 digest 与 approved ids），否则拒绝继续。
+// 抽成函数是为了支持 --accept-only：只接受上一批，不采集、不收藏、也不需要 CDP（审计缺口 D15）。
+function acceptPendingBatch() {
+  if (!state.pendingBatch || FAV_DRY_RUN) return false
   const n = state.pendingBatch
   const batch = readJSON(path.join(BASE, `review_batch_${n}.json`), null)
   const ok = readJSON(path.join(BASE, `review_ok_${n}.json`), null)
@@ -167,6 +167,27 @@ if (!MODE && state.pendingBatch && !FAV_DRY_RUN) {
   }
   state.pendingBatch = null; saveState()
   console.log(`review_ok_${n} accepted (${(ok.approved_card_ids || []).length} approved)`)
+  return true
+}
+
+// --accept-only：只接受上一批审核结果（不采集、不收藏、不连 CDP）
+if (ACCEPT_ONLY) {
+  const accepted = acceptPendingBatch()
+  if (accepted) process.exit(0)
+  console.log(state.pendingBatch ? `ACCEPT_ONLY: batch=${state.pendingBatch} 还不能接受（原因见上面的 REVIEW_PENDING 提示）` : 'ACCEPT_ONLY: 当前没有待审批次')
+  process.exit(state.pendingBatch ? 42 : 0)
+}
+
+// 先接受上一批，再检查停线/配额
+if (!MODE && !FAV_DRY_RUN) acceptPendingBatch()
+
+if (MODE) {
+  // 纠正模式：撤回误点/结批/接受审核不受停线与配额影响（auditor X1）
+  if (stopHit || restHit || quotaHit) console.log('注意：存在停止/配额状态（' + (stopHit ? 'STOP_TODAY' : restHit ? 'REST_UNTIL' : quotaHit) + '），--rollback/--batch/--accept-only 仍允许执行')
+} else {
+  if (stopHit) { console.log('STOP_TODAY: 今天已因风险信号停止'); process.exit(2) }
+  if (restHit) { console.log('REST_UNTIL 未到，休息中：', new Date(restHit).toISOString()); process.exit(2) }
+  if (quotaHit) { console.log(quotaHit, '已达上限'); process.exit(2) }
 }
 function targetFav() { return Math.max(1, Number(process.argv[3] || 5)) }
 if (!MODE && targetFav() > DAILY_FAV_CAP - state.favorites) {
@@ -458,7 +479,8 @@ async function favorite(w, opts = {}) {
 
 // ---------- 审核闸门（digest 校验） ----------
 function writeReviewBatch(records) {
-  const n = (state.batchSeq || 0) + 1
+  // D12：批号取 batchSeq 与 pendingBatch 的较大者 + 1，避免「上一批还没审完又写同号批文件」把证据覆盖掉
+  const n = Math.max(Number(state.batchSeq) || 0, Number(state.pendingBatch) || 0) + 1
   const ids = records.map(r => r.card_id)
   writeJSON(path.join(BASE, `review_batch_${n}.json`), {
     batch: n, created_at: new Date().toISOString(), digest: digestOf(ids), declared: records.length,
@@ -475,6 +497,27 @@ function writeReviewBatch(records) {
   process.exit(42)
 }
 
+// 回滚后把「这个人的收藏」从所有账本里退回去（D17/D18）
+function dropRolledBackRecords(key, removedIds = []) {
+  const ids = new Set(removedIds)
+  const samePerson = (r) => !!r && ((r.card_id && ids.has(r.card_id)) || (key.includes('|') && `${r.name}|${r.age}` === key))
+  state.favorites = Math.max(0, (state.favorites || 0) - 1)
+  state.sinceBatch = Math.max(0, (state.sinceBatch || 0) - 1)
+  const before = (state.pendingRecords || []).length
+  state.pendingRecords = (state.pendingRecords || []).filter(r => !samePerson(r))
+  saveState()
+  if (before !== state.pendingRecords.length) console.log('rollback: 从 pendingRecords 移除', before - state.pendingRecords.length, '条')
+  const p = path.join(BASE, 'passes.jsonl')
+  if (fs.existsSync(p)) {
+    const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean)
+    const kept = lines.filter(l => { try { return !samePerson(JSON.parse(l)) } catch { return true } })
+    if (kept.length !== lines.length) {
+      fs.writeFileSync(p, kept.length ? kept.join('\n') + '\n' : '', { mode: 0o600 })
+      console.log('rollback: 从 passes.jsonl 移除', lines.length - kept.length, '条')
+    }
+  }
+}
+
 // ---------- 回滚 ----------
 async function rollback(keys) {
   if (FAV_DRY_RUN) { console.log('FAV_DRY_RUN=1，回滚被禁用'); process.exit(1) }
@@ -485,11 +528,27 @@ async function rollback(keys) {
   let fr = null
   for (let k = 0; k < 40; k++) { await sleep(900); fr = (await frames()).find(f => /recommend\/interaction/.test(f.url)); if (fr) break }
   if (!fr) { console.log('rollback: 找不到收藏牛人列表'); process.exit(2) }
+  // D14：收藏列表是懒加载的，帧出现 ≠ 列表渲染完。冷启动第一次直接读会拿到 0 张，
+  // 于是被判成「全部未命中」并 exit 2（实测 7 秒误报、同一条命令重试 27 秒才成功）。这里补就绪轮询。
+  let listReady = false
+  for (let t = 0; t < 25; t++) {
+    await sleep(1200)
+    const n = await evalIn(fr.id, 'document.querySelectorAll(".card-item").length').catch(() => -1)
+    if (n > 0) { listReady = true; break }
+  }
+  if (!listReady) console.log('WARN rollback: 30s 内没读到任何 .card-item（列表可能为空或仍在加载）')
   const known = new Set(readJSON(path.join(BASE, 'known_fav.json'), []))
   const done = new Set()
+  const missed = new Set()
   let hits = 0
   for (let r = 0; r < 30; r++) {
-    const cards = await evalIn(fr.id, 'Array.from(document.querySelectorAll(".card-item")).map(c=>(c.innerText||"").replace(/\\s+/g," ").trim())')
+    let cards = []
+    for (let t = 0; t < 6; t++) {
+      cards = await evalIn(fr.id, 'Array.from(document.querySelectorAll(".card-item")).map(c=>(c.innerText||"").replace(/\\s+/g," ").trim())').catch(() => [])
+      if (Array.isArray(cards) && cards.length) break
+      await sleep(1200)
+    }
+    if (!Array.isArray(cards)) cards = []
     let progressed = false
     for (const key of keys) {
       if (done.has(key)) continue
@@ -506,7 +565,7 @@ async function rollback(keys) {
         const re = age ? new RegExp(nm + '(?:\\s+[^\\s]+){0,2}\\s+' + age + '岁') : new RegExp(nm)
         idx = cards.findIndex(t => re.test(t))
       }
-      if (idx < 0) { console.log('rollback miss', key); continue }
+      if (idx < 0) { missed.add(key); continue }
       const cardText = cards[idx]
       if (/打招呼|联系Ta|畅聊|搜索畅聊卡/.test(cardText)) { console.log('rollback allowlist block', key); continue }
       const rect = await evalIn(fr.id, `(()=>{const c=document.querySelectorAll('.card-item')[${idx}];c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h4,h3')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height}})()`)
@@ -520,7 +579,7 @@ async function rollback(keys) {
       const st = await favorite(w, { restoreOnUnfav: false })
       console.log('rollback', key, st)
       if (st === 'unfav') {
-        hits++; progressed = true; done.add(key)
+        hits++; progressed = true; done.add(key); missed.delete(key)
         const r = cleanupKnown({ base: BASE, key, cardText, known })
         writeJSON(path.join(BASE, 'known_fav.json'), [...r.known])
         writeJSON(path.join(BASE, 'known_fav_map.json'), r.map)
@@ -528,6 +587,9 @@ async function rollback(keys) {
           JSON.stringify({ ts: Date.now(), key, card_id: (r.removedIds && r.removedIds[0]) || null }) + '\n',
           { mode: 0o600 })
         console.log('rollback cleaned', r.removedKeys.length, 'keys,', r.removedIds.length, 'card_ids')
+        // D17/D18：回滚要把「收藏成功」的账也退回去，否则 state.favorites 虚高、pendingRecords/passes
+        // 里还留着已回滚的人，下一次 --batch 会把它们重新送审、台账也会多算。
+        dropRolledBackRecords(key, r.removedIds || [])
       }
       await closeOverlay(); await sleep(FAV_GAP)
     }
@@ -536,7 +598,7 @@ async function rollback(keys) {
     await sleep(2600)
     if (!progressed && (await evalIn(fr.id, 'document.querySelectorAll(".card-item").length')) <= before) break
   }
-  if (hits === 0) { console.log('rollback: 全部未命中（请确认姓名/年龄与收藏页一致）'); process.exit(2) }
+  if (hits === 0) { console.log('rollback: 全部未命中（请确认姓名/年龄与收藏页一致）:', [...missed].join(',') || keys.join(',')); process.exit(2) }
   console.log('rollback done, hits =', hits)
   process.exit(0)
 }
@@ -599,11 +661,13 @@ async function main() {
         cards = cards.filter(c => typeof c === 'string' && c.trim())
         if (!cards.length) { console.log('tab', ti, 'no valid cards'); continue }
         const passes = runJudge(cards)
-        const passById = new Map(passes.map(p => [p.card_id, p]))
-        for (let i = 0; i < cards.length; i++) {
-          const cid = cardId(cards[i])
-          if (!passById.has(cid)) continue
-          const p = passById.get(cid)
+        // D13：收藏顺序 = 判定器给出的顺序（city_rank 升序 → c3_months 降序），不是页面 DOM 顺序。
+        // 之前直接按 DOM 顺序收藏，导致「城市优先」在真正点收藏时完全不生效（实测北京候选人排第 3 个被收藏）。
+        const domIndex = new Map(cards.map((c, i) => [cardId(c), i]))
+        const queue = passes.map(p => ({ p, i: domIndex.get(p.card_id) })).filter(x => Number.isInteger(x.i))
+        if (queue.length !== passes.length) console.log('WARN', passes.length - queue.length, '条 PASS 找不到对应卡片，已跳过')
+        for (const { p, i } of queue) {
+          const cid = p.card_id
           const nameAge = String(p.name || '').trim() + '|' + p.age
           if (alreadyFav(cards[i], cid, nameAge, p.want)) { console.log('skip known', cid, nameAge); continue }
           const rect = await evalIn(rf.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return null;c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height,txt:(n.innerText||'').slice(0,60)}})()`)

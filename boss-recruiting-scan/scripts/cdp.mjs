@@ -1,4 +1,4 @@
-// CDP 调试助手（只读/诊断用）：state | cards | shot | ax | reload | eval
+// CDP 调试助手（只读/诊断用）：state | cards | shot | ax | reload | scroll | eval | navigate | more | pmore | wheel | dump
 // 用法：CDP_URL=http://127.0.0.1:9333 BOSS_WORK=/tmp/boss node cdp.mjs <cmd>
 // 注意：开浮层/点收藏请用 scan-favorite.mjs（本文件的 open/fav 旧命令已移除）。
 import { writeFileSync, mkdirSync } from 'node:fs'
@@ -97,23 +97,51 @@ async function main() {
       if (text.length < 10) continue;
       cards.push(text);
     }
-    return { total: cards.length, cards, href: location.href, login: /退出登录/.test(document.body ? document.body.innerText : '') };
+    return { total: cards.length, cards, href: location.href };
   })())`
+
+  // 登录态必须在**顶层文档**判断：推荐 iframe 里没有头像/退出登录菜单，
+  // 旧实现在帧里找「退出登录」→ 登录成功也恒为 false（审计缺口 D10）。
+  const LOGIN_QUERY = `JSON.stringify((()=>{
+    const t = document.body ? document.body.innerText : '';
+    const loginPath = /\\/web\\/user\\//.test(location.href);
+    const loginWords = /扫码登录|验证码登录|注册登录/.test(t) || /注册登录/.test(document.title || '');
+    const navOk = /职位管理|推荐牛人|牛人管理|沟通/.test(t);
+    const cookieOk = /(?:^|;\\s*)wt2=/.test(document.cookie);
+    return { login: !loginPath && !loginWords && (navOk || cookieOk), loginPath, loginWords, navOk, cookieOk, href: location.href, title: document.title };
+  })())`
+  const loginOfTop = async () => {
+    try {
+      const top = (await frames())[0]
+      const info = JSON.parse(await evalIn(top.frameId, LOGIN_QUERY))
+      return info
+    } catch (e) { return { error: e.message } }
+  }
 
 
   if (cmd === 'state') {
     const list = await frames()
     const top = list[0]
     const title = await evalIn(top.frameId, 'document.title')
-    console.log(JSON.stringify({ url: top.url, title, frames: list }, null, 1))
+    const loginInfo = await loginOfTop()
+    console.log(JSON.stringify({ url: top.url, title, login: !!(loginInfo && loginInfo.login), loginDetail: loginInfo, frames: list }, null, 1))
     return
   }
   if (cmd === 'cards') {
     const feed = await pickFrame(/web\/frame\/recommend/)
     const raw = await evalIn(feed.frameId, CARDS_QUERY)
     const data = JSON.parse(raw)
-    console.log(JSON.stringify({ frame: feed.frameId, url: feed.url, total: data.total, login: data.login }, null, 1))
+    const loginInfo = await loginOfTop()
+    console.log(JSON.stringify({ frame: feed.frameId, url: feed.url, total: data.total, login: !!(loginInfo && loginInfo.login) }, null, 1))
     data.cards.forEach((card, i) => console.log(`#${i} ${card}`))
+    if (!data.total) {
+      // 收藏牛人列表页没有「打招呼」按钮，旧实现恒 0 条（审计缺口 D24）；这里补一条 .card-item 读法
+      const favs = await evalIn(feed.frameId, `Array.from(document.querySelectorAll('.card-item')).map(c=>(c.innerText||'').replace(/\\s+/g,' ').trim()).filter(Boolean)`).catch(() => [])
+      if (Array.isArray(favs) && favs.length) {
+        console.log(JSON.stringify({ kind: 'favorite-list', total: favs.length }, null, 1))
+        favs.forEach((t, i) => console.log(`F${i} ${t}`))
+      }
+    }
     return
   }
   if (cmd === 'shot') {
@@ -121,7 +149,7 @@ async function main() {
     mkdirSync(path.dirname(shotPath), { recursive: true })
     const m = await c.send('Page.getLayoutMetrics')
     const vp = m.cssVisualViewport
-    const shot = await c.send('Page.captureScreenshot', { format: 'jpeg', quality: 70, fromSurface: true, captureBeyondViewport: false, clip: { x: vp.pageX, y: vp.pageY, width: vp.clientWidth, height: vp.clientHeight, scale: 0.5 } })
+    const shot = await c.send('Page.captureScreenshot', { format: 'jpeg', quality: 70, fromSurface: false, captureBeyondViewport: false, clip: { x: vp.pageX, y: vp.pageY, width: vp.clientWidth, height: vp.clientHeight, scale: 0.5 } })
     writeFileSync(shotPath, Buffer.from(shot.data, 'base64'), { mode: 0o600 })
     console.log(JSON.stringify({ path: shotPath, width: Math.round(vp.clientWidth), height: Math.round(vp.clientHeight) }))
     return
@@ -148,6 +176,17 @@ async function main() {
     const r0 = await evalIn(feed.frameId, `JSON.stringify((() => { const el = document.scrollingElement || document.body; const before = el.scrollTop; el.scrollTop = el.scrollTop + ${dy}; return { before, after: el.scrollTop, height: el.scrollHeight }; })())`)
     await sleep(1200)
     console.log(r0)
+    return
+  }
+  if (cmd === 'navigate') {
+    const url = process.argv[3]
+    if (!url) { console.log('usage: node cdp.mjs navigate <url>'); process.exit(2) }
+    await c.send('Page.navigate', { url })
+    await sleep(4500)
+    const list = await frames()
+    const top = list[0]
+    const title = await evalIn(top.frameId, 'document.title').catch(() => '')
+    console.log(JSON.stringify({ navigated: url, url: top.url, title }, null, 1))
     return
   }
   if (cmd === 'eval') {

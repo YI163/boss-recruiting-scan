@@ -14,15 +14,31 @@ description: 在 BOSS 直聘招聘端「推荐牛人」页按约定口径批量�
 
 ## 前置条件
 
-1. 用户已登录的 Chrome，**用调试端口另起实例**（不碰用户主窗口）。macOS 可执行文件绝对路径与环境细节见 `README.md`「1. 起一个带调试端口的 Chrome」：
-   `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=$HOME/.boss-prof --remote-debugging-port=9333 https://www.zhipin.com/web/chat/recommend`
-   Windows 等价命令：
-   `& "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="$env:USERPROFILE\.boss-prof" --remote-debugging-port=9333 https://www.zhipin.com/web/chat/recommend`
-   （Windows 上解释器、路径、冒烟验收与本地补丁清单见 `README-windows.md`。）
-2. 首屏为推荐牛人页，职位与城市已选定、账号正确。
-3. Node ≥ 22（可能不在 PATH，见 README）；Python 3；`make_ledger.py` 要 xlsx 需 openpyxl（系统 python3 没有时用 README 给的解释器路径，缺则只产 md）。
+**0. 拿到这套文件（三选一；`git clone` 后**不需要** npm/pip 安装任何依赖）**
+
+```bash
+git clone https://github.com/YI163/boss-recruiting-scan.git                                  # 官方
+git clone https://gh-proxy.com/https://github.com/YI163/boss-recruiting-scan.git             # 国内镜像（git 可用，已实测）
+curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/refs/heads/main   # 只取文件，不能 push
+```
+
+`gh-proxy.com` 不通时再试 `ghproxy.net`（时好时坏）、`ghfast.top`（只能取文件）或 zip 直下；要长期只读镜像可在 Gitee「从 GitHub 导入」。**目录位置决定能不能被自动发现**：放进 `~/.dsh/skills/` 才会被 skill 系统加载；clone 到任意目录也能直接 `node scripts/...` 跑。
+
+1. Chrome **用调试端口另起实例**（不碰日常窗口）。macOS 细节见 `README.md`「1. 起一个带调试端口的 Chrome」：
+   `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=$HOME/.boss-prof --remote-debugging-port=9333 https://www.zhipin.com/web/chat/index`
+   Windows：
+   `& "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="$env:USERPROFILE\.boss-prof" --remote-debugging-port=9333 https://www.zhipin.com/web/chat/index`
+   **受管终端（DSH、CI、Job Object 托管）必须「脱离启动」**，否则命令一结束 Chrome 就被连带杀掉、9333 随即消失：
+   `powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\.dsh\tools\start-detached.ps1 -Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -Arguments "--user-data-dir=C:\Users\<you>\.boss-prof --remote-debugging-port=9333 --no-first-run --new-window https://www.zhipin.com/web/chat/index"`
+   没有该脚本时用 `Invoke-CimMethod -ClassName Win32_Process -MethodName Create` 等价启动。
+   **Chrome 136+ 不允许默认 profile 开调试端口**（显式传默认 `--user-data-dir`、junction、subst 均无效），Windows 上也无法靠复制 cookie 搬登录态（v20 App-Bound Encryption 会把解不开的 cookie 删掉）——**只能在这个独立 profile 里登录一次**。
+2. **登录必须选「我要招聘」**再扫码/输验证码；落到求职端首页是扫不出招聘端的。登录后侧栏应出现 职位管理 / 推荐牛人 / 沟通。
+3. 首屏为推荐牛人页，职位与城市已选定、账号正确。
+4. Node ≥ 22（可能不在 PATH，见 README）；Python 3；`make_ledger.py` 要 xlsx 需 openpyxl（系统 python3 没有时用 README 给的解释器路径，缺则只产 md）。
    **Windows**：`python3`/`python` 常是 Microsoft Store 空壳（能执行但 `exit 9009`、无任何输出），必须显式 `PYTHON_BIN`（`py` 启动器或真实 `python.exe`）；未设置时脚本会自动探测 `python3`→`python`→`py`。
-4. 与用户确认：**口径卡**、**目标收藏数**、**是否允许收藏**。
+5. **自检顺序**：先 `python3 scripts/judge.py --selftest`（12/12，不需要浏览器）→ 再起 Chrome → 再 `node scripts/cdp.mjs state`。`state` 的 `login` 由顶层 DOM、URL `/web/user/`、cookie `wt2=` 三处共同判定；`login:false` 时先看同一条输出里的 `loginDetail`，再决定要不要重新扫码（旧版按推荐帧里的「退出登录」文本判定，登录成功也会报 false，已修）。
+6. **PowerShell 5.1 编码**：先 `chcp 65001`，并设 `$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8`；读写 UTF-8 JSON 用 `[IO.File]::ReadAllText/$p`（`Set-Content -Encoding utf8` 会带 BOM → 脚本 `JSON.parse` 失败、`daily_state` 被静默重置）。
+7. 与用户确认：**口径卡**、**目标收藏数**、**是否允许收藏**。
 
 ## 两种连接方式（二选一）
 
@@ -49,7 +65,9 @@ description: 在 BOSS 直聘招聘端「推荐牛人」页按约定口径批量�
 
 **Step 0 口径卡**：三段条件（见 `references/criteria.md`），每段写清「算/不算」。口径实现于 `scripts/judge.py`；换口径改判定器，不改流程。
 
-**Step 1 环境**：`node scripts/cdp.mjs state` 确认存在 `/web/frame/recommend/` 帧；窗口不能最小化（最小化时 CDP 点击无效、截图超时）。
+> ⚠️ **默认判定器不是通用口径**：`judge.py` 内置「长沙优先 / 英语 A 级 / 教学或大厂职能经历月数」三条，**依赖卡片里的起止日期**。BOSS 推荐卡的正文多数没有起止日期，所以默认口径在真实卡上常常 **0 PASS**（实测 14 张真实卡 0 PASS，同一批换成自写口径后 8 PASS）。第一次用请把它当**骨架**，按 `scripts/judge_template.py` 改写口径再跑；`WARN 判定器本轮 0 条 PASS` 是口径不适配的信号，不是"这批人都不合适"。
+
+**Step 1 环境**：`node scripts/cdp.mjs state` 确认存在 `/web/frame/recommend/` 帧、且 `login:true`；需要换页时用 `node scripts/cdp.mjs navigate <url>`（v1.8.2+ 新增，例如 `navigate "https://www.zhipin.com/web/chat/recommend"`）。窗口不能最小化（最小化时 CDP 点击无效、截图超时）。首次 `shot` 可能拍到全白（页面还没渲染完）→ 等 8 秒重拍，不要据此判断页面坏了。
 
 **Step 2 筛选（可选）**：手动在页面点「筛选」→ 勾选目标条件（如院校「留学」）→「确定」，命中率可提高数倍。`Page.navigate` 会复位筛选；脚本默认 `APPLY_FILTER=1`，每轮回点「筛选 → 应用 → 确定」重放上次筛选，但**不会自动勾选条件**——首次需人工勾好；若页面没有「应用上次筛选」提示，则筛选不会被重放。
 
@@ -63,9 +81,11 @@ description: 在 BOSS 直聘招聘端「推荐牛人」页按约定口径批量�
 
 **Step 7 审核闸门**：每累计 5 个收藏，脚本写 `review_batch_N.json`（只含证据字段：card_id/掩码姓名/年龄/城市/期望/c1 月数与 segments/c2 等级与 evidence/c3 月数与 segments，**不含完整卡片**）+ `digest`，并 `exit 42`。审核方逐人核 c1/c2/c3，写 `review_ok_N.json`：`{"batch":N,"digest":"<与 batch 一致>","approved_card_ids":[...],"rejected_card_ids":[...]}`。脚本启动校验：batch 序号、digest、**ap∪rj 覆盖全部候选且不重叠**；被拒者须已 `--rollback`。`batchSeq`/`sinceBatch`/`pendingRecords` 持久化，旧审批不能复用。手动结批：`node scan-favorite.mjs --batch`。
 
-**Step 8 回滚**：审核不通过 / 误收藏 → `node scripts/scan-favorite.mjs --rollback "真实姓名,..."`。**优先真实姓名**（card_id 是哈希、页面文本不含它，传 card_id 直接报错退出）；也接受掩码名 `唐**|27`（best-effort，按首字通配+年龄匹配）；在收藏牛人页按姓名匹配 → 点开 → 点收藏（= 取消）→ 校验 toast「取消收藏成功」；成功后经 `known-cleanup.mjs` 按「姓名|年龄 / 掩码名|年龄 / 同年龄+同首字」清理 `known_fav.json`，**并删除对应 16hex card_id**（`known_fav_map.json` 映射、`review_batch_*.json` 反查）；全部未命中时 `exit 2`（不假成功）；`FAV_DRY_RUN=1` 时拒绝回滚。
+> **接受审核是一个独立动作**：`node scripts/scan-favorite.mjs --accept-only` 只校验并消费 `review_ok_N.json`，**不需要浏览器、也不会再收藏人**。不带它时，下一次正式启动会先自动接受，但**接受发生在配额/停线检查之前**（所以「今天收藏到顶了但最后一批还没结」不会再卡死）；`FAV_DRY_RUN=1` 时不消费审批（联调不动账本）。
 
-**Step 9 台账**：`python3 scripts/make_ledger.py --work $BOSS_WORK --out <交付目录> --title 招聘筛人台账-YYYYMMDD` → xlsx + md（通过名单 / 收藏记录 / 审核批次 / 说明）。
+**Step 8 回滚**：审核不通过 / 误收藏 → `node scripts/scan-favorite.mjs --rollback "真实姓名,..."`。**优先真实姓名**（card_id 是哈希、页面文本不含它，传 card_id 直接报错退出）；也接受掩码名 `唐**|27`（best-effort，按首字通配+年龄匹配）；在收藏牛人页按姓名匹配 → 点开 → 点收藏（= 取消）→ 校验控件文案回「收藏」；成功后经 `known-cleanup.mjs` 按「姓名|年龄 / 掩码名|年龄 / 同年龄+同首字」清理 `known_fav.json`，**并删除对应 16hex card_id**（`known_fav_map.json` 映射、`review_batch_*.json` 反查）；同时**回退账本**：`state.favorites`/`state.sinceBatch` 各减 1，`state.pendingRecords` 与 `passes.jsonl` 里该人的记录一并删除——否则下次 `--batch` 会把已回滚的人重新送审。收藏牛人页有就绪轮询（25×1.2s），冷启动第一次就等它加载完，否则会误报「全部未命中」。全部未命中时 `exit 2`（不假成功）；`FAV_DRY_RUN=1` 时拒绝回滚。
+
+**Step 9 台账**：`python3 scripts/make_ledger.py --work $BOSS_WORK --out <交付目录> --title 招聘筛人台账-YYYYMMDD` → xlsx + md（通过名单 / 收藏记录 / 审核批次 / 说明）。`--out` 不传时默认写到 `$BOSS_WORK`（不再写当前目录）；出 xlsx 必须用带 openpyxl 的解释器（缺库会提示，只产 md）；台账里时间统一转本地时区并把时区写进表头。
 
 **Step 10 停止**：达标、用户喊停、或任一风险信号 → 立即停、截图、汇报；写 `STOP_TODAY`。
 
@@ -128,7 +148,10 @@ description: 在 BOSS 直聘招聘端「推荐牛人」页按约定口径批量�
 - **浮层卡在离场状态**：点关闭后 Vue 可能停在 `v-leave v-leave-active`（`opacity:1`、`pointerEvents:auto`），盖住整个 iframe，导致后续全 `overlay not opened`。判据只认最后一个非 `v-leave` 的 `.boss-popup__wrapper`；关不掉时删掉卡死节点（`overlay cleanup`）。
 - **浮层节点会累积**：每个候选开一次卡就多一个 `boss-popup__wrapper`（实测跑到 22 个 `c-resume` 帧），`querySelector` 只取第一个是错的——必须取最后一个 live wrapper。
 - **白屏有三种**：①调试器 attach 触发反爬（`warlockdata`/`patas` SDK 长期 pending，文档反复重建）→ 按风险信号停；②`Page.navigate` 后 SPA 重挂（`readyState:loading`、正文 36~98 字、帧树已有帧但顶层取不到 iframe）→ 就绪轮询，等；③点歪落到侧栏/推广弹层 → 导航回推荐页。判据见 troubleshooting 第一节。
-- **假记录**：旧坐标实现曾写出「日志报 fav、收藏列表里没有」的记录；核对以 `/web/chat/interaction?status=9` 的 `.card-item` 为准，发现假记录时同步清理 `known_fav.json`/`known_fav_map.json` 并在台账注明。
+- **假记录**：旧坐标实现曾写出「日志报 fav、收藏列表里没有」的记录；核对以 `/web/chat/interaction?status=9` 为准，发现假记录时同步清理 `known_fav.json`/`known_fav_map.json` 并在台账注明。
+- **核对收藏别数总条数**：收藏牛人页**懒加载**（首屏 10 条，滚动才到 18）且**混着账号历史**（实测 18 条里 13 条是以前收的）。用 `node scripts/favcapture.mjs`（自带就绪轮询）：输出 `this_round` / `historical_count` 才是本轮成绩；把「18 条」当战果会虚报。
+- **卡片「期望城市」不可信**：同一人推荐卡显示深圳、进收藏页变珠海/济南（实测两例）。城市只用于排序与提示，台账城市列以收藏页为准，别拿它做硬淘汰。
+- **默认口径在真实卡上常 0 PASS**：`judge.py` 内置的三条口径依赖起止日期，而推荐卡多数没有日期 → 先按 Step 0 的警告改写口径，别把 `0 PASS` 当结论。
 - **重复收藏 toggle**：已收藏的人再点会取消 → `known_fav.json` 同时存 `card_id` 与 `姓名|年龄`（兼容旧数据/掩码姓名），卡片含「已收藏」也跳过；收藏成功即原子写入。
 - **姓名/日期解析**：姓名前常有活跃标签；年龄取 `N岁`；日期成对配对；教育条目跳过；PASS 用 `card_id` 对齐而不是姓名。
 - **限流征兆**：连续空 feed / 无 iframe 偏移 / 异常 → 连续 3 次写 `REST_UNTIL` 停 30 分钟（**下次启动会读取并拒绝运行**）；收藏失败率 >50% 直接 `stopRisk('favorite-failure')`（截图 + STOP_TODAY）。
@@ -166,14 +189,18 @@ description: 在 BOSS 直聘招聘端「推荐牛人」页按约定口径批量�
 
 ```bash
 export CDP_URL=http://127.0.0.1:9333 BOSS_WORK=/tmp/boss
+node scripts/cdp.mjs state                            # 看 url/frames/login/loginDetail
+node scripts/cdp.mjs navigate "https://www.zhipin.com/web/chat/recommend"   # 换页（v1.8.2+）
 FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 1      # 联调：1 轮不点收藏
 node scripts/scan-favorite.mjs 150 5                  # 正式：≤150 轮，收藏 5 人后停轮交审
 python3 scripts/judge.py --selftest                   # 默认口径判定器，12/12
 python3 scripts/judge_template.py --selftest          # 换口径模板，5/5
 node scripts/scan-favorite.mjs --selfcheck-judge      # 判定器契约回归（无浏览器），6/6
 node scripts/scan-favorite.mjs --batch                # 不足 5 人时手动结批（exit 42）
-node scripts/scan-favorite.mjs --rollback "真实姓名"   # 取消收藏并清理 known 状态
-python3 scripts/make_ledger.py --work $BOSS_WORK --out . --title 招聘筛人台账-$(date +%Y%m%d)
+node scripts/scan-favorite.mjs --accept-only          # 只接受 review_ok_N（无浏览器、不再收藏）
+node scripts/scan-favorite.mjs --rollback "真实姓名"   # 取消收藏 + 清理 known + 回退账本
+node scripts/favcapture.mjs                           # 本轮 vs 历史收藏（this_round / historical_count）
+python3 scripts/make_ledger.py --work $BOSS_WORK --title 招聘筛人台账-$(date +%Y%m%d)   # 默认输出到 $BOSS_WORK
 ```
 
 ## 交付前自检
@@ -181,11 +208,13 @@ python3 scripts/make_ledger.py --work $BOSS_WORK --out . --title 招聘筛人台
 - [ ] 轮次/收藏在配额内，无 `STOP_TODAY` / `REST_UNTIL`
 - [ ] 每个 PASS 都有 `card_id` + 证据；收藏以控件文案「已收藏」自证（toast 仅补充）
 - [ ] `review_batch_N.json` 都有对应 `review_ok_N.json`；未通过者已 `--rollback`
-- [ ] 台账 xlsx + md 已生成；与收藏牛人页核对一致（`favcapture.mjs`，或直接看 `/web/chat/interaction?status=9` 的 `.card-item` 条数）
+- [ ] 台账 xlsx + md 已生成（xlsx 需 openpyxl 解释器）；用 `node scripts/favcapture.mjs` 核对，**只认 `this_round`**，别拿收藏页总条数（含历史、且懒加载）当成绩
+- [ ] 每批 `review_ok_N.json` 都有对应 `--accept-only`／启动自动接受的日志；被拒者已 `--rollback`（账本 `state.favorites` 同步减掉）
 - [ ] 若换过口径：`judge_template.py --selftest` 与 `scan-favorite.mjs --selfcheck-judge` 均通过
 
 ## 版本
 
+- 2026-10-28 **本地补丁 3：按「拿不到本地补丁的新人」外测报告修 24 条（非上游版本）**。报告：一个 agent 只读 GitHub 仓库、在干净沙盒里从头跑两轮，产出 `TEST-REPORT.md`（2 Blocker + 13 Major + 9 Minor）。本补丁修完：**A. 文档**（取仓库三路径：官方/gh-proxy.com 镜像/codeload zip；受管终端必须脱离启动 Chrome；登录必须选「我要招聘」；自检顺序与 PowerShell 编码；默认口径在真实卡上常 0 PASS 的警告；核对收藏只认 `this_round`；卡片城市不可信）。**B. 代码**：①`cdp.mjs` 的 `login` 改按顶层 DOM+URL+`wt2=` 判定（旧实现找推荐帧里的「退出登录」，登录成功也报 false）；②新增 `cdp.mjs navigate <url>`（文档说要打开推荐页，但此前没有该子命令）；③`cdp.mjs cards` 在收藏页回退读 `.card-item`（此前恒 `total 0`）、`shot` 改 `fromSurface:false`（默认值会挂住）；④收藏顺序真的按判定器排序（`domIndex` → `queue`），此前 changelog 声称已实现、代码仍按 DOM 顺序；⑤新增 `--accept-only`，并把「接受审批」提到配额/停线检查之前（否则当天到顶时最后一批永远结不清）；⑥`--batch` 批号取 `batchSeq`/`pendingBatch` 最大值（并发时不再重号）；⑦`--rollback` 加收藏页就绪轮询（冷启动首跑不再误报「全部未命中」），且成功回退 `state.favorites`/`sinceBatch`、清 `pendingRecords`/`passes.jsonl`（此前回滚后账本仍记着、下次还会把已回滚者送审）；⑧`make_ledger.py --out` 默认 `$BOSS_WORK`、时间转本地、缺 openpyxl 时给明确修法；⑨`favcapture.mjs` 加就绪轮询并区分 `this_round`/`historical_count`。
 - 2026-10-28 **本地补丁 2：把「点收藏」从坐标点击改成元素点击 + 浮层判据修复（非上游版本）**。实测两轮跑通（第 2 批审核 + 台账）。①`scan-favorite.mjs` 开卡改元素优先（`.row.name-wrap` 的 JS `click()` 返回 `el-click`），坐标仅兜底；②收藏改点推荐帧内 `.like-icon-and-text`，用控件文案「收藏→已收藏」自证，toast 降为辅助（旧实现靠 toast 产生过假阳性/假阴性）；③浮层判据由「帧树里有 c-resume 帧」改为「推荐帧里最后一个非 `v-leave` 的 `.boss-popup__wrapper` 且可见」——c-resume 画布帧关掉后仍常驻，是 `stale overlay` 空转的根因；④`closeOverlay` 改为点 live wrapper 的 `.close-btn` + 清除卡在 `v-leave` 的残留节点（`overlay cleanup: removed N stuck node(s)`）+ 推荐帧内派发 Escape，最后才用真实 rect 兜底；⑤主循环固定 `sleep(9000)` 改成就绪轮询（卡片数连续两次相同）；⑥新增 `references/troubleshooting.md`（白屏三因、卡住四因、点空三层、闸门卡住、为何扩展桥不能收藏、Windows 专属结论）；⑦SKILL.md 修正「收藏按钮在 shadow DOM、只能坐标点击」的错误说法，坐标表改为元素选择器，新增「两种连接方式」章节（A 独立调试实例=全自动，B 扩展桥=只读筛人）。
 - 2026-10-28 **本地 Windows 补丁（非上游版本，v1.8.2 之上）**：仅修 POSIX 路径/解释器假设，不改流程、节奏、配额、闸门与口径——①`scan-favorite.mjs` 自检临时目录改用 `os.tmpdir()`（原先写死 `/tmp/…`，Windows 上 `mkdtemp` 直接 ENOENT）；②新增解释器探测（`PYTHON_BIN` 优先，未设置时按平台探测，Windows 附加 `py` 启动器），`PYTHON_BIN` 为商店空壳时 `FATAL` 明确提示；③`scan-favorite.mjs`/`cdp.mjs`/`favcapture.mjs`/`judge.py`/`judge_template.py`/`make_ledger.py`/`strict2.py` 的默认工作目录在 Windows 改为 `%TEMP%\boss`（POSIX 仍是 `/tmp/boss`）；④新增 `README-windows.md`（环境、冒烟验收、与 macOS 的差异、补丁回滚）。验收：`judge.py --selftest 12/12`、`judge_template.py --selftest 5/5`、`scan-favorite.mjs --selfcheck-judge 6/6`。
 - 2026-10-28 v1.8.2：按「换口径」实测修复——判定器可选输出 `city_rank`（0/1/2），收藏顺序与台账排序**真实生效**（city_rank 升序 → 条件3月数降序）；`judge_template.py` 支持 `city.acceptable`、`c3.mode='evidence'`（布尔型条件）与完整 `want` 解析；`scan-favorite.mjs` 校验 `city_rank`/负月数，判定器 0 条 PASS 时 WARN（ok/near/all 全空才 FATAL）；`--rollback` 成功写 `rollbacks.jsonl`，台账新增「城市优先级」列与「已回滚」状态，说明不再硬编码默认口径；`ledger_config.json` 支持 `note` 自定义口径说明。

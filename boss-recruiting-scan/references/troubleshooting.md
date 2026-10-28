@@ -142,3 +142,22 @@ https://static.zhipin.com/assets/sdk/apm/patas-compat.2.1.0.min.js
 1. **Chrome 136+ 不允许在默认 user-data-dir 上开调试端口**。实测三条路都不通：直接指定默认目录、目录 junction、`subst` 盘符映射——Chrome 会把路径解析回默认目录，端口不监听。必须用全新的 `--user-data-dir`（本机 `C:\Users\<you>\.boss-prof`），**并且在这个实例里登录一次**。
 2. **Cookie 搬不过去**：源 profile 的 zhipin cookie 全部是 `v20` 前缀（App-Bound Encryption）。复制 `Local State` + `Cookies` + `Preferences` 到新 profile 启动后，实测 10 条 cookie **全被 Chrome 删掉**（解不开的 v20 会被清除）。macOS 的 cookie 密钥在钥匙串、同用户可复用，所以上游 README 里"复制 Default 目录"的流程在 macOS 成立、在 Windows 不成立。
 3. 非管理员账号改不了 `HKLM\SOFTWARE\Policies\Google\Chrome`（`HKCU` 那个键访问被拒），所以没法用企业策略放开默认 profile 调试。
+
+---
+
+## 七、新人外测暴露的"跑起来但不是要做的事"（v1.8.2 本地补丁 3）
+
+一个只读公开仓库、在干净沙盒里从零跑的 agent 交了 24 条缺口（2 Blocker + 13 Major + 9 Minor）。执行层是结实的——它真实收藏了 7 人、回滚 2 次、过了 2 批审核、出了 xlsx；问题全在**入门层**，补丁 3 已修，留档备查：
+
+| 症状 | 真实原因 | 现在的做法 |
+|---|---|---|
+| 文档照做但走不到第一张卡 | ①`github.com:443` 时通时不通（实测同一台机器 40 分钟内两种结果）；②受管终端里 `& chrome.exe` 起的实例，命令一结束就被 Job Object 带走，9333 随即消失；③默认 `judge.py` 在真实卡上 `0 PASS` | 文档给「官方 / `gh-proxy.com` / codeload zip」三路径；给 `start-detached.ps1` 脱离启动命令；Step 0 明确写「默认口径依赖起止日期，真实卡多数没有日期，请改写口径」 |
+| `cdp.mjs state` 登录成功仍报 `login:false` | 旧判据在**推荐帧**里找「退出登录」文本，而该文本不在那里 | 改按「顶层 DOM + URL `/web/user/` + cookie `wt2=`」判定，并打印 `loginDetail` |
+| 想换页发现没有命令 | `cdp.mjs` 只有 state/cards/shot/eval/…，没有 navigate，而文档写「打开推荐页」 | 新增 `node scripts/cdp.mjs navigate <url>` |
+| 当天收藏到顶后最后一批永远结不清 | 接受审批被排在配额/停线检查**之后**，且必须再跑一次会收藏的采集才能接受 | 新增 `--accept-only`（不连浏览器、不再收藏）；不带它时启动先接受再检查配额 |
+| 接受审批时"顺手"又收藏了一个人 | 接受只能靠下一次采集触发 | 同上：`--accept-only` 是唯一不产生新收藏的接受路径 |
+| 回滚冷启动第一次必失败 | 收藏牛人页有懒加载/就绪延迟，旧实现找帧后立刻匹配 | 回滚前 25×1.2s 就绪轮询，未命中改为最后汇总打印 |
+| 回滚后账本还记着、下次又被送审 | 回滚只清 `known_fav`，没有回退 `state.favorites`、没清 `pendingRecords`/`passes.jsonl` | 回滚成功同步回退计数并删除对应记录，台账不再虚报收藏事件 |
+| 核对收藏数总是对不上 | 收藏牛人页懒加载（10→18）且混着账号历史（18 条里 13 条是历史） | `favcapture.mjs` 输出 `this_round` / `historical_count`，文档明确「别拿总条数当成绩」 |
+| 台账跑完落在奇怪的地方 / 没有 xlsx | `--out` 默认是 cwd；xlsx 需要 openpyxl | `--out` 默认 `$BOSS_WORK`；缺库时打印明确修法；时间统一转本地并标注时区 |
+| 声称"收藏顺序按判定排序"但实际按页面顺序 | changelog 已写、代码仍 `for (i...)` 按 DOM 顺序 | 主循环改 `domIndex` → `queue`，排序真的生效 |

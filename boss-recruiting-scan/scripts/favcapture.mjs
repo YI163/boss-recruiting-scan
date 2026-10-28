@@ -73,6 +73,15 @@ async function main() {
     console.log('favorite list iframe not found'); process.exit(2)
   }
 
+  // 收藏列表是懒加载的：帧出现 ≠ 列表渲染完。先等出至少一张卡再读（审计缺口 D14/D19）
+  let listReady = false
+  for (let t = 0; t < 25; t++) {
+    const n = await evalIn(fr.id, 'document.querySelectorAll(".card-item").length').catch(() => 0)
+    if (n > 0) { listReady = true; break }
+    await sleep(1200)
+  }
+  if (!listReady) console.log('WARN: 30s 内没读到 .card-item（收藏可能为空，或列表仍在加载）')
+
   const seen = new Map()
   for (let round = 0; round < 40; round++) {
     const arr = await evalIn(fr.id, 'Array.from(document.querySelectorAll(".card-item")).map(c=>(c.innerText||"").replace(/\\s+/g," ").trim())')
@@ -84,8 +93,31 @@ async function main() {
     if (add === 0 && round > 2) break
   }
   const out = [...seen.values()].map(mask)
-  fs.writeFileSync(OUT, JSON.stringify({ captured_at: new Date().toISOString(), count: out.length, cards: out }, null, 1), { mode: 0o600 })
-  console.log('wrote', OUT, out.length)
+  // 这个页面会把**历史收藏**一起列出来（老账号十几条很常见），所以不能拿「页面条数」当本轮成绩
+  // （审计缺口 D19）。这里用 known_fav.json / known_fav_map.json 里的本轮记录做交集，区分本轮与历史。
+  const readJ = (p, d) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return d } }
+  const known = new Set(readJ(path.join(BASE, 'known_fav.json'), []) || [])
+  for (const v of Object.values(readJ(path.join(BASE, 'known_fav_map.json'), {}) || {})) known.add(String(v))
+  const thisRound = [], historical = []
+  for (const c of out) {
+    const hit = [...known].some(k => {
+      const [nm, age] = String(k).split('|')
+      if (!nm) return false
+      return c.includes(nm) && (!age || c.includes(age + '岁'))
+    })
+    ;(hit ? thisRound : historical).push(c)
+  }
+  fs.writeFileSync(OUT, JSON.stringify({
+    captured_at: new Date().toISOString(),
+    count: out.length,
+    this_round_count: thisRound.length,
+    historical_count: historical.length,
+    this_round: thisRound,
+    historical,
+    cards: out,
+  }, null, 1), { mode: 0o600 })
+  console.log('wrote', OUT, 'total', out.length, 'this_round', thisRound.length, 'historical', historical.length)
+  if (historical.length) console.log('提示：该页含历史收藏', historical.length, '条；核对本轮只看 this_round（别拿总条数当成绩）。')
   process.exit(0)
 }
 main().catch(e => { console.log('FATAL', e.message); process.exit(1) })

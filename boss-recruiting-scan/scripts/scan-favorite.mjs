@@ -585,7 +585,9 @@ async function rollback(keys) {
       if (idx < 0) { missed.add(key); continue }
       const cardText = cards[idx]
       if (/打招呼|联系Ta|畅聊|搜索畅聊卡/.test(cardText)) { console.log('rollback allowlist block', key); continue }
-      const rect = await evalIn(fr.id, `(()=>{const c=document.querySelectorAll('.card-item')[${idx}];c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h4,h3')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height}})()`)
+      // 读卡 → 点击之间可能被懒加载/重排打断（DOM 竞态），读不到 rect 就跳过这一轮，别抛未捕获异常。
+      const rect = await evalIn(fr.id, `(()=>{const c=document.querySelectorAll('.card-item')[${idx}];if(!c)return null;c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h4,h3')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height}})()`).catch(() => null)
+      if (!rect) { console.log('rollback: 卡片已重排，跳过本轮', key); missed.add(key); continue }
       await sleep(600)
       // D14：开浮层用「元素点击优先 + 轮询」，坐标只做兜底。
       // 实测：收藏牛人页按坐标点 (off.x+rect.x+…) 会落空（overlay not opened），

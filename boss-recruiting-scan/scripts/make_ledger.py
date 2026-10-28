@@ -115,6 +115,16 @@ def main():
     ok = list(merged.values())
 
     # ---- 收藏状态：known_fav / rejected
+    # 真实姓名：scan-favorite 开卡时从推荐流卡片抓到的（judge 的 name 是掩码，仅作隐私兜底）
+    real_names = load_json(os.path.join(args.work, 'real_names.json'), {}) or {}
+
+    def real_name_of(x):
+        cid = x.get('card_id')
+        return (real_names.get(cid) or x.get('name_real') or '').strip()
+
+    def shown_name(x):
+        return real_name_of(x) or (x.get('name') or x.get('name_masked') or '')
+
     known = set(load_json(os.path.join(args.work, 'known_fav.json'), []) or [])
     known_map = load_json(os.path.join(args.work, 'known_fav_map.json'), {}) or {}
     known |= {v for v in known_map.values()}
@@ -200,17 +210,17 @@ def main():
         for c in ws[1]:
             c.font = bold
         for i, x in enumerate(ok_sorted, 1):
-            ws.append([i, x.get('card_id'), x.get('name'), x.get('age'), x.get('city'), rank_label(x), x.get('want'),
+            ws.append([i, x.get('card_id'), shown_name(x), x.get('age'), x.get('city'), rank_label(x), x.get('want'),
                        x.get('c1_months'), x.get('c2_level'), x.get('c3_months'), status(x), review(x)])
         for w, c in zip([6, 18, 10, 6, 10, 12, 18, 10, 10, 12, 12, 10], 'ABCDEFGHIJKL'):
             ws.column_dimensions[c].width = w
 
         ws2 = wb.create_sheet('收藏记录')
-        ws2.append(['时间(本地)', 'card_id', '姓名(掩码)', '年龄', '结果', 'state'])
+        ws2.append(['时间(本地)', 'card_id', '姓名', '年龄', '结果', 'state'])
         for c in ws2[1]:
             c.font = bold
         for r in favs:
-            ws2.append([local_ts(r.get('ts')), r.get('card_id'), r.get('name_masked'), r.get('age'), r.get('action'), r.get('state')])
+            ws2.append([local_ts(r.get('ts')), r.get('card_id'), shown_name(r) or r.get('name_masked'), r.get('age'), r.get('action'), r.get('state')])
 
         ws3 = wb.create_sheet('审核批次')
         ws3.append(['批次', '声明人数', '候选数', 'approved', 'rejected', '状态'])
@@ -223,7 +233,7 @@ def main():
         for n in [
             labels.get('note') or '口径以 judge 输出为准（可用 JUDGE_PY 替换判定器；列名/说明可用 ledger_config.json 覆盖）。',
             '城市优先级来自判定器输出的 city_rank（0=优先、1=不限/可接受、2=其它），排序规则：city_rank 升序 → 条件3月数降序。',
-            '姓名已掩码；不收录手机号/微信/邮箱等联系方式；本台账不含完整卡片原文。',
+            '姓名优先取推荐流卡片上的真实姓名（real_names.json / name_real），取不到才回退判定器给的掩码名；不收录手机号/微信/邮箱等联系方式；本台账不含完整卡片原文。',
             '收藏状态来自 known_fav.json / rejected.json / rollbacks.jsonl：已收藏 / 已拒绝 / 已回滚 / 未收藏。',
             '审核：每 5 个收藏生成 review_batch_N.json，审核后写 review_ok_N.json；被拒者应 --rollback。',
         ]:
@@ -239,12 +249,12 @@ def main():
     md.append('|---|---|---|---|---|---|---|---|---|---|---|---|')
     for i, x in enumerate(ok_sorted, 1):
         md.append('| %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |' % (
-            i, x.get('card_id'), x.get('name'), x.get('age'), x.get('city'), rank_label(x), x.get('want'),
+            i, x.get('card_id'), shown_name(x), x.get('age'), x.get('city'), rank_label(x), x.get('want'),
             x.get('c1_months'), x.get('c2_level'), x.get('c3_months'), status(x), review(x)))
     md.append('')
     md.append('## 收藏记录（%d）' % len(favs))
     for r in favs:
-        md.append('- %s %s %s岁 %s' % (local_ts(r.get('ts')), r.get('name_masked'), r.get('age'), r.get('action')))
+        md.append('- %s %s %s岁 %s' % (local_ts(r.get('ts')), shown_name(r) or r.get('name_masked'), r.get('age'), r.get('action')))
     md.append('')
     md.append('## 审核批次（%d）' % len(batch_rows))
     for b in batch_rows:

@@ -61,8 +61,14 @@ const REVIEW_EVERY = (() => {
   return 5
 })()
 const TAB_OFFSET = { '推荐': 56, '精选': 116, '最新': 176 }
-const TABS = (Array.isArray(CFG?.batch?.tabs) ? CFG.batch.tabs : ['推荐', '最新'])
-  .map(n => TAB_OFFSET[n]).filter(x => Number.isFinite(x))
+// 「精选」一律不收藏：该页的富集卡片要「搜索畅聊卡」才能开聊（付费资源），
+// 且卡片/浮层结构与推荐流不同，在这里点收藏等于把节奏和预算放到错的页面上。
+const TABS_DISALLOWED = ['精选']
+const TAB_NAMES = Array.isArray(CFG?.batch?.tabs) ? CFG.batch.tabs : ['推荐', '最新']
+TABS_DISALLOWED.forEach(n => {
+  if (TAB_NAMES.includes(n)) console.log(`WARN: config.batch.tabs 含「${n}」，已忽略（铁律：精选页开聊需搜索畅聊卡，本 skill 不在精选页收藏）`)
+})
+const TABS = TAB_NAMES.filter(n => !TABS_DISALLOWED.includes(n)).map(n => TAB_OFFSET[n]).filter(x => Number.isFinite(x))
 const TAB_X = TABS.length ? TABS : [TAB_OFFSET['推荐'], TAB_OFFSET['最新']]
 
 fs.mkdirSync(BASE, { recursive: true })
@@ -485,7 +491,7 @@ function writeReviewBatch(records) {
   writeJSON(path.join(BASE, `review_batch_${n}.json`), {
     batch: n, created_at: new Date().toISOString(), digest: digestOf(ids), declared: records.length,
     candidates: records.map(r => ({
-      card_id: r.card_id, name: r.name, age: r.age, city: r.city, want: r.want, verdict: r.verdict,
+      card_id: r.card_id, name: r.name, name_real: r.name_real || '', age: r.age, city: r.city, want: r.want, verdict: r.verdict,
       c1_months: r.c1_months, c1_segments: r.c1_segments || [], c2_level: r.c2_level, c2_evidence: r.c2_evidence || [],
       c3_months: r.c3_months, c3_segments: r.c3_segments || [], flags: r.flags || []
     }))
@@ -521,8 +527,19 @@ function dropRolledBackRecords(key, removedIds = []) {
 // ---------- 回滚 ----------
 async function rollback(keys) {
   if (FAV_DRY_RUN) { console.log('FAV_DRY_RUN=1，回滚被禁用'); process.exit(1) }
-  const bad = keys.filter(k => /^[0-9a-f]{16}$/.test(k))
-  if (bad.length) { console.log('rollback: card_id 是哈希，收藏页文本里不含它，无法匹配；请改传真实姓名：', bad.join(',')); process.exit(2) }
+  // 回滚接受：真实姓名 / 掩码姓名 / card_id。
+  // card_id → 真实姓名（real_names.json 是本脚本在开浮层时抓到的），抓不到的再报错。
+  const realNames = readJSON(path.join(BASE, 'real_names.json'), {})
+  const bad = []
+  const resolved = []
+  for (const k of keys) {
+    if (/^[0-9a-f]{16}$/.test(k)) {
+      const rn = realNames[k]
+      if (rn) { resolved.push(rn); console.log('rollback: card_id', k, '→ 真实姓名', rn) } else bad.push(k)
+    } else resolved.push(k)
+  }
+  if (bad.length) { console.log('rollback: 这些 card_id 没有记录真实姓名（real_names.json 里没有），请改传真实姓名：', bad.join(',')); process.exit(2) }
+  keys = resolved
   await connect(); await send('Page.enable'); await assertSafe()
   await send('Page.navigate', { url: 'https://www.zhipin.com/web/chat/interaction?status=9' })
   let fr = null
@@ -650,6 +667,14 @@ async function main() {
       }
       for (let ti = 0; ti < TAB_X.length; ti++) {
         if (ti > 0) { await click(off.x + TAB_X[ti], off.y + 30); await sleep(3200); if (await cResumeOpen()) { await closeOverlay(); await sleep(600) } }
+        // 硬闸：落在「精选」页就整轮跳过。该页开聊要「搜索畅聊卡」（付费），
+        // 而且卡片/浮层结构与推荐流不同，在这页点收藏会把节奏与预算用到错地方。
+        const tabNow = await evalIn(rf.id, `(()=>{const c=document.querySelector('.tab-item.curr');const t=c?(c.innerText||'').replace(/\\s+/g,''):'';
+          const b=document.body?document.body.innerText:'';return {tab:t,jx:/精选优质牛人/.test(b)}})()`).catch(() => null)
+        if (tabNow && (tabNow.tab === '精选' || (tabNow.jx && !tabNow.tab))) {
+          console.log('SKIP 精选页（开聊需搜索畅聊卡，本 skill 不在精选页收藏）tab', ti)
+          continue
+        }
         let cards = []
         for (let k = 0; k < 8; k++) {
           cards = await evalIn(rf.id, 'Array.from(document.querySelectorAll(".candidate-card-wrap")).map(c=>c.innerText.replace(/\\s+/g," ").trim())')
@@ -670,8 +695,13 @@ async function main() {
           const cid = p.card_id
           const nameAge = String(p.name || '').trim() + '|' + p.age
           if (alreadyFav(cards[i], cid, nameAge, p.want)) { console.log('skip known', cid, nameAge); continue }
-          const rect = await evalIn(rf.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return null;c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height,txt:(n.innerText||'').slice(0,60)}})()`)
+          const rect = await evalIn(rf.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return null;c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height,txt:(n.innerText||'').slice(0,60),name:((c.querySelector('.name')||{}).innerText||'').trim()}})()`)
           if (!rect) continue
+          // 姓名口径：推荐流卡片上是真实姓名（「吴嫔」），判定器输出的是掩码（「吴**」）。
+          // ① 身份用真实姓名 + card_id；② 卡片名字若仍是带星号的掩码（精选页就是这样），
+          // 直接跳过不收藏 —— 收藏一个连姓名都核对不了的人，后面审核/回滚都没法对账。
+          const cardName = String(rect.name || '').trim()
+          if (/\*/.test(cardName)) { console.log('SKIP 掩码姓名，不收藏（无法核对身份）', cid, cardName || '(空)'); continue }
           if (/打招呼|联系Ta|畅聊|搜索畅聊卡/.test(rect.txt || '')) { console.log('ALLOWLIST BLOCK', cid); continue }
           await sleep(600)
           // 打开卡片前必须确认上一张卡的浮层已关闭：残留浮层会让收藏按钮指向“上一个人”，
@@ -696,26 +726,33 @@ async function main() {
           if (!(await cResumeOpen())) { await click(cx, cy); for (let t = 0; t < 12 && !(await cResumeOpen()); t++) await sleep(500) }
           if (!(await cResumeOpen())) { console.log('overlay not opened', cid); continue }
           await assertSafe()
+          const realName = cardName
           const w = (await evalTop('document.documentElement.clientWidth')) || 1431
           attempts++
-          if (FAV_DRY_RUN) { console.log('DRY would favorite', p.name, p.age, 'card_id', cid) }
+          if (FAV_DRY_RUN) { console.log('DRY would favorite', realName || p.name, p.age, 'card_id', cid) }
           else {
             const st = await favorite(w)
             if (st === 'fav') {
               fav++; state.favorites++; known.add(cid); knownIds.add(cid); known.add(nameAge); knownKeys.add(nameAge)
+              if (realName) { known.add(`${realName}|${p.age}`); knownKeys.add(`${realName}|${p.age}`) }
               writeJSON(path.join(BASE, 'known_fav.json'), [...known])
               const favMap = readJSON(path.join(BASE, 'known_fav_map.json'), {})
-              favMap[cid] = nameAge
+              favMap[cid] = realName ? `${realName}|${p.age}` : nameAge
               writeJSON(path.join(BASE, 'known_fav_map.json'), favMap)
-              appendJSONL(path.join(BASE, 'passes.jsonl'), { ts: new Date().toISOString(), ...p })
-              log({ card_id: cid, name_masked: p.name, age: p.age, action: 'favorited', state: st })
-              state.pendingRecords.push({ card_id: cid, name: p.name, age: p.age, city: p.city, want: p.want, verdict: p.verdict,
+              if (realName) {
+                const rn = readJSON(path.join(BASE, 'real_names.json'), {})
+                rn[cid] = realName
+                writeJSON(path.join(BASE, 'real_names.json'), rn)
+              }
+              appendJSONL(path.join(BASE, 'passes.jsonl'), { ts: new Date().toISOString(), real_name: realName || '', ...p })
+              log({ card_id: cid, name_masked: p.name, name_real: realName || '', age: p.age, action: 'favorited', state: st })
+              state.pendingRecords.push({ card_id: cid, name: p.name, name_real: realName || '', age: p.age, city: p.city, want: p.want, verdict: p.verdict,
                 c1_months: p.c1_months, c1_segments: p.c1_segments, c2_level: p.c2_level, c2_evidence: p.c2_evidence,
                 c3_months: p.c3_months, c3_segments: p.c3_segments, flags: p.flags })
               state.sinceBatch = (state.sinceBatch || 0) + 1
-            } else { fails++; log({ card_id: cid, name_masked: p.name, age: p.age, action: 'failed', state: st }) }
+            } else { fails++; log({ card_id: cid, name_masked: p.name, name_real: realName || '', age: p.age, action: 'failed', state: st }) }
             saveState()
-            console.log('favorite', p.name, p.age, st, 'fav', fav, '/', targetFav())
+            console.log('favorite', realName || p.name, p.age, st, 'fav', fav, '/', targetFav())
             if (!FAV_DRY_RUN && state.pendingRecords.length >= REVIEW_EVERY) writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
             }
           await closeOverlay(); await sleep(FAV_GAP)

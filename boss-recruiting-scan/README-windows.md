@@ -165,3 +165,8 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 - 每累计 5 个收藏 `exit 42` 停轮审核；`review_ok_N.json` 必须覆盖全部候选，被拒者先 `--rollback`；只想接受审批（不再收藏人）用 `node scripts/scan-favorite.mjs --accept-only`。
 - 发现登录失效 / 安全验证 / 操作频繁 / 收藏失败率 >50% → 截图 + 写 `STOP_TODAY` + 非零退出，当天不再跑。
 - 姓名只落掩码（`张**`），不导出手机号/微信/邮箱。
+
+**补丁 4 追加两条（与平台无关）**：
+
+1. 不在「精选」页收藏——那页开聊要「搜索畅聊卡」（付费），卡片姓名还是加密掩码；脚本运行中检测到精选页会整轮 `SKIP 精选页`，`config.batch.tabs` 里的「精选」也会被忽略。
+2. 掩码姓名不收藏——推荐流卡片上是真实姓名（`.name`），判定器输出才是掩码；卡片姓名带 `*` 的候选直接跳过，收藏成功写 `$BOSS_WORK\real_names.json` 供审核/台账/回滚使用。

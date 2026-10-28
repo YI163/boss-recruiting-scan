@@ -129,6 +129,11 @@ export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-prima
 3. **只开一个 BOSS 标签页**：脚本取第一个含 `zhipin` 的 page；开多个 BOSS tab 可能连错页面。
 4. **白屏 / 一直卡着不动 / 收藏点了没反应**：这三类是本 skill 踩得最深的坑（反爬重建、SPA 重挂、浮层卡在 `v-leave`、魔法坐标点空），成因、判断方法与修法全在 [`references/troubleshooting.md`](references/troubleshooting.md)。
 
+## 4.2 两条硬规则（本地补丁 4）
+
+1. **不在「精选」页收藏**：「精选」的开聊要「搜索畅聊卡」（付费），卡片姓名也是加密掩码（`李**`）。脚本已做硬闸：`config.batch.tabs` 写「精选」会被忽略；运行中落在精选页（`.tab-item.curr` = 精选）→ 整轮 `SKIP 精选页`。
+2. **掩码姓名不收藏**：推荐流卡片上是真实姓名（`.name`），判定器输出的 `name` 是掩码。身份以「真实姓名 + card_id」为准；卡片姓名仍带 `*` 的候选直接跳过（`SKIP 掩码姓名`），否则审核/回滚都无法对账。收藏成功会写 `$BOSS_WORK/real_names.json`，审核包带 `name_real`，台账「姓名」列优先真实姓名；`--rollback` 也支持传 card_id（自动换成真实姓名）。
+
 ## 5. 数据与隐私
 
 - 姓名只落掩码（`张**`）；不采集手机号/微信/邮箱；不落完整卡片原文。

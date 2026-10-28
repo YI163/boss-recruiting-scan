@@ -180,7 +180,8 @@ async function main() {
   }
   if (cmd === 'navigate') {
     const url = process.argv[3]
-    if (!url) { console.log('usage: node cdp.mjs navigate <url>'); process.exit(2) }
+    if (!url || url === '--help' || url === '-h') { console.log('usage: node cdp.mjs navigate <url>'); process.exit(url ? 0 : 2) }
+    if (!/^https?:\/\//i.test(url)) { console.log(`ERR 不是 http(s) URL: ${url}\nusage: node cdp.mjs navigate <url>`); process.exit(2) }
     await c.send('Page.navigate', { url })
     await sleep(4500)
     const list = await frames()

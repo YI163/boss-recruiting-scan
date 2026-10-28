@@ -22,7 +22,7 @@ curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/
 | 依赖 | 说明 |
 |---|---|
 | Node ≥ 22 | 可能不在 PATH：`/usr/bin/env node` 找不到时用 `$HOME/.dsh/node/bin/node`（先 `export PATH="$HOME/.dsh/node/bin:$PATH"`） |
-| Python 3 | 台账要 xlsx 时需要 openpyxl；系统 `python3` 没有就用 `/Users/wangjie/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python3` |
+| Python 3 | 台账要 xlsx 时需要 openpyxl；系统 `python3` 没有就换一个装了 openpyxl 的解释器（`pip install openpyxl`，或直接用你本机 DSH 自带的 python） |
 | Chrome | 用**调试端口的副本实例**，不要动你正在用的窗口 |
 
 > **默认判定器不是通用口径**：`judge.py` 内置「长沙优先 / 英语 A 级 / 教学或大厂经历月数」，依赖卡片里的起止日期；BOSS 推荐卡多数没有日期，真实卡上常 **0 PASS**（实测 14 张真卡 0 PASS）。第一次用请按 `scripts/judge_template.py` 改写口径，详见 `SKILL.md` 的 Step 0。
@@ -80,7 +80,7 @@ node scripts/scan-favorite.mjs 150 5
 #    只想接受审批（不再收藏人、不连浏览器）：node scripts/scan-favorite.mjs --accept-only
 
 # ⑥ 出台账（用带 openpyxl 的解释器；不传 --out 就写到 $BOSS_WORK）
-export PY=/Users/wangjie/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python3
+export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python3
 "$PY" scripts/make_ledger.py --work "$BOSS_WORK" --title 招聘筛人台账-$(date +%Y%m%d)
 ```
 

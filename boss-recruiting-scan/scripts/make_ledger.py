@@ -95,8 +95,9 @@ def main():
     ap.add_argument('--out', default=None)
     ap.add_argument('--title', default='招聘筛人台账-' + datetime.now().strftime('%Y%m%d'))
     args = ap.parse_args()
+    # 不传 --out 时跟随 --work（再退到 BOSS_WORK / %TEMP%\boss），避免产物落到意外目录
     if not args.out:
-        args.out = os.environ.get('BOSS_WORK') or DEFAULT_WORK
+        args.out = args.work
     os.makedirs(args.out, exist_ok=True)
 
     # 口径列名（换口径后可用 ledger_config.json 覆盖，避免贴错标签）

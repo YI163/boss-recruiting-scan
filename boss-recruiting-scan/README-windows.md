@@ -1,11 +1,11 @@
-# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁）
+# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁 3）
 
 本 skill 的文档与默认值原本按 macOS 写（`/tmp/boss`、`python3`、osascript）。**流程、节奏、配额、审核闸门、判定口径一律未改**，Windows 适配只做了两件事：
 
 1. 把「写死的 POSIX 路径 + 解释器假设」改成按平台判断（默认值与文档保持一致，显式设 `BOSS_WORK`/`PYTHON_BIN` 时行为与上游完全相同）；
 2. 补这份 Windows 说明。
 
-安装位置：`C:\Users\<you>\.dsh\skills\boss-recruiting-scan`（`<skill>` 下文都指这个目录）。
+本机安装位置示例：`C:\Users\<你>\.dsh\skills\boss-recruiting-scan`（下文 `<skill>` 都指这个目录；放别处也能跑）。
 
 拿代码（国内网络三选一，`clone` 后**不需要**装任何 npm/pip 依赖）：
 

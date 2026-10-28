@@ -1,4 +1,4 @@
-# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁 3）
+# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁 4）
 
 本 skill 的文档与默认值原本按 macOS 写（`/tmp/boss`、`python3`、osascript）。**流程、节奏、配额、审核闸门、判定口径一律未改**，Windows 适配只做了两件事：
 
@@ -164,7 +164,7 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 - **零外联**：只点「收藏」和关浮层，绝不「打招呼 / 联系Ta / 搜索畅聊卡」。
 - 每累计 5 个收藏 `exit 42` 停轮审核；`review_ok_N.json` 必须覆盖全部候选，被拒者先 `--rollback`；只想接受审批（不再收藏人）用 `node scripts/scan-favorite.mjs --accept-only`。
 - 发现登录失效 / 安全验证 / 操作频繁 / 收藏失败率 >50% → 截图 + 写 `STOP_TODAY` + 非零退出，当天不再跑。
-- 姓名只落掩码（`张**`），不导出手机号/微信/邮箱。
+- 姓名：推荐流真实姓名（`.name`）与判定器掩码名并存，只落本机 `real_names.json`/台账；不导出手机号/微信/邮箱。
 
 **补丁 4 追加两条（与平台无关）**：
 

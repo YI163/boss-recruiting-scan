@@ -587,11 +587,20 @@ async function rollback(keys) {
       if (/打招呼|联系Ta|畅聊|搜索畅聊卡/.test(cardText)) { console.log('rollback allowlist block', key); continue }
       const rect = await evalIn(fr.id, `(()=>{const c=document.querySelectorAll('.card-item')[${idx}];c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h4,h3')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height}})()`)
       await sleep(600)
-      const off = await evalTop(`(()=>{const f=[...document.querySelectorAll('iframe')].find(i=>(i.src||'').includes('/web/frame/recommend/interaction'));if(!f)return null;const b=f.getBoundingClientRect();return {x:b.left,y:b.top}})()`)
-      if (!off) { console.log('rollback: iframe offset missing'); process.exit(2) }
-      await click(off.x + rect.x + Math.min(rect.w * 0.5, 160), off.y + rect.y + Math.min(rect.h * 0.5, 22))
-      await sleep(2600)
-      if (!(await cResumeOpen())) { console.log('rollback: overlay not opened', key); continue }
+      // D14：开浮层用「元素点击优先 + 轮询」，坐标只做兜底。
+      // 实测：收藏牛人页按坐标点 (off.x+rect.x+…) 会落空（overlay not opened），
+      // 而 c.querySelector('.row.name-wrap').click() 稳定打开浮层（浮层 wrapper 就在 interaction 帧里）。
+      const waitOpen = async () => { for (let t = 0; t < 16; t++) { if (await cResumeOpen()) return true; await sleep(500) } return false }
+      const elClick = await evalIn(fr.id, `(()=>{const c=document.querySelectorAll('.card-item')[${idx}];if(!c)return 'no-card';const n=c.querySelector('.row.name-wrap')||c.querySelector('[class*="name"]')||c;n.click();return 'el-click'})()`).catch(() => 'err')
+      let openedNow = elClick === 'el-click' && (await waitOpen())
+      if (!openedNow) {
+        const off = await evalTop(`(()=>{const f=[...document.querySelectorAll('iframe')].find(i=>(i.src||'').includes('/web/frame/recommend/interaction'));if(!f)return null;const b=f.getBoundingClientRect();return {x:b.left,y:b.top}})()`)
+        if (!off) { console.log('rollback: iframe offset missing'); process.exit(2) }
+        console.log('rollback: element click 未开浮层，回退坐标点击', key, elClick)
+        await click(off.x + rect.x + Math.min(rect.w * 0.5, 160), off.y + rect.y + Math.min(rect.h * 0.5, 22))
+        openedNow = await waitOpen()
+      }
+      if (!openedNow) { console.log('rollback: overlay not opened', key); continue }
       const w = (await evalTop('document.documentElement.clientWidth')) || 1431
       const st = await favorite(w, { restoreOnUnfav: false })
       console.log('rollback', key, st)

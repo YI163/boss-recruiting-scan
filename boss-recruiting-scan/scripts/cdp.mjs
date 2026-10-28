@@ -135,11 +135,19 @@ async function main() {
     console.log(JSON.stringify({ frame: feed.frameId, url: feed.url, total: data.total, login: !!(loginInfo && loginInfo.login) }, null, 1))
     data.cards.forEach((card, i) => console.log(`#${i} ${card}`))
     if (!data.total) {
-      // 收藏牛人列表页没有「打招呼」按钮，旧实现恒 0 条（审计缺口 D24）；这里补一条 .card-item 读法
-      const favs = await evalIn(feed.frameId, `Array.from(document.querySelectorAll('.card-item')).map(c=>(c.innerText||'').replace(/\\s+/g,' ').trim()).filter(Boolean)`).catch(() => [])
+      // 收藏牛人列表页没有「打招呼」按钮，旧实现恒 0 条（审计缺口 D24）；这里补一条 .card-item 读法。
+      // 该页懒加载：帧出现 ≠ 列表渲染完，所以要轮询几次（实测冷启动要 2~4 秒）。
+      let favs = []
+      for (let t = 0; t < 8; t++) {
+        favs = await evalIn(feed.frameId, `Array.from(document.querySelectorAll('.card-item')).map(c=>(c.innerText||'').replace(/\\s+/g,' ').trim()).filter(Boolean)`).catch(() => [])
+        if (Array.isArray(favs) && favs.length) break
+        await sleep(1000)
+      }
       if (Array.isArray(favs) && favs.length) {
         console.log(JSON.stringify({ kind: 'favorite-list', total: favs.length }, null, 1))
         favs.forEach((t, i) => console.log(`F${i} ${t}`))
+      } else {
+        console.log(JSON.stringify({ kind: 'favorite-list', total: 0, note: '8s 内没读到 .card-item（列表为空或仍在加载）' }, null, 1))
       }
     }
     return

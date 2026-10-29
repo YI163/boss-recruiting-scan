@@ -4,19 +4,31 @@ BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP �
 
 > A Claude/DSH-style skill for screening and bookmarking candidates on the BOSS Zhipin recruiter recommendation feed. CDP-driven, rate-limited, with a mandatory human-review gate every 5 bookmarks. Zero outreach by design.
 
-## 最短用法（零基础，真的只要一句话）
+## 最短用法（零基础，一句话 + 一句要求）
 
-**把这个仓库地址丢给你正在用的 AI 助手（DSH / Claude Code / Cursor / ChatGPT 等），再说一句：**
+**把这个仓库地址丢给你正在用的 AI 助手（DSH / Claude Code / Cursor / ChatGPT 等），一句话里把「要什么人」说清楚：**
 
-> 把 https://github.com/YI163/boss-recruiting-scan 装成 skill，然后按 README 带我跑一轮筛人。
+> 把 https://github.com/YI163/boss-recruiting-scan 装成 skill，帮我筛人：**深圳、兼职、Java 后端，本科计算机相关专业，一年以上后端经验（应届要有完整项目）**。先跑两轮，每 5 个给我审一次。
 
-它会自己 clone 仓库、放进 skill 目录、起一个独立的调试 Chrome，然后告诉你去哪儿登录。接下来你只需要做三件事：
+**「要什么人」这句不能省。** 这个 skill 不是一键全自动的筛人机器，它按你给的要求判。你不说要求，它就只能用仓库里的默认口径——那是给模板看的示例，**在真实候选人卡片上常常一个人都不 PASS**（真实卡片没有起止日期，默认口径算不出年限）。
+
+要求里最好说清这 5 件事，说漏的 AI 会反问你：
+
+1. **岗位方向**：Java 后端 / 前端 / 测试 / 运营 / 销售…
+2. **城市**：只要深圳，还是深圳优先、周边（东莞/惠州/广州）也行
+3. **全职还是兼职**、能接受的薪资范围
+4. **经验与学历**：几年以上、本科还是大专、专业是否要计算机相关、应届要不要
+5. **硬性加分项**：例如 Spring Boot / 微服务 / Redis；英语 A 级；教学或大厂经历
+
+不知道怎么写也不要紧：AI 会按这 5 项问你要答案，然后先给你一张「口径卡」和判定器改动让你确认，确认后才开始跑。
+
+装好之后它自己会 clone、放进 skill 目录、起一个独立的调试 Chrome。你只需要做三件事：
 
 1. 在它打开的 Chrome 窗口里登录招聘端（**选「我要招聘」**，不是「我要找工作」）
 2. 每 5 个人它会停下来给你一份名单，你回「这批都行」或点名去掉谁
 3. 跑完看它出的台账（xlsx + md），自己再核一遍
 
-一句记不住就记这句：**「把这个仓库装成 skill，带我跑一轮。」**
+一句记不住就记这句：**「把这个仓库装成 skill，我要招<岗位+城市+年限+学历>，带我跑一轮。」**
 
 ---
 

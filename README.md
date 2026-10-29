@@ -4,6 +4,20 @@ BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP �
 
 > A Claude/DSH-style skill for screening and bookmarking candidates on the BOSS Zhipin recruiter recommendation feed. CDP-driven, rate-limited, with a mandatory human-review gate every 5 bookmarks. Zero outreach by design.
 
+## 最短用法（零基础，真的只要一句话）
+
+**把这个仓库地址丢给你正在用的 AI 助手（DSH / Claude Code / Cursor / ChatGPT 等），再说一句：**
+
+> 把 https://github.com/YI163/boss-recruiting-scan 装成 skill，然后按 README 带我跑一轮筛人。
+
+它会自己 clone 仓库、放进 skill 目录、起一个独立的调试 Chrome，然后告诉你去哪儿登录。接下来你只需要做三件事：
+
+1. 在它打开的 Chrome 窗口里登录招聘端（**选「我要招聘」**，不是「我要找工作」）
+2. 每 5 个人它会停下来给你一份名单，你回「这批都行」或点名去掉谁
+3. 跑完看它出的台账（xlsx + md），自己再核一遍
+
+一句记不住就记这句：**「把这个仓库装成 skill，带我跑一轮。」**
+
 ---
 
 ## ⚠️ 风险与免责声明（先读这一段，再决定要不要跑）
@@ -32,7 +46,7 @@ BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP �
 
 - **零外联**：不打招呼、不发消息、不点「联系Ta / 搜索畅聊卡」；只有「收藏」和「关闭浮层」两个写操作，且点击前有 allowlist。
 - 不绕过平台限制：节奏有下限（轮间隔 ≥15s、收藏间隔 ≥12s），配额有上限（单日收藏 ≤60、轮次 ≤200、连跑 ≤180 分钟），登录页/安全验证/操作频繁即停。
-- 不导出隐私：身份以推荐流的**真实姓名 + card_id** 为准（落在本机 eal_names.json），判定器输出仍是掩码；不采集手机号/微信/邮箱，卡片原文只用临时文件、判完即删。--rollback 支持真实姓名与 card_id。
+- 不导出隐私：身份以推荐流的**真实姓名 + card_id** 为准（落在本机 `real_names.json`），判定器输出仍是掩码；不采集手机号/微信/邮箱，卡片原文只用临时文件、判完即删。--rollback 支持真实姓名与 card_id。
 
 ## 安装
 

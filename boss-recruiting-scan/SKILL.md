@@ -1,6 +1,6 @@
 ---
 name: boss-recruiting-scan
-description: 在 BOSS 直聘招聘端「推荐牛人」页按约定口径批量筛选候选人并点「收藏」，含 CDP 调试端口驱动、防封节奏与配额、每 5 人一道审核闸门、误点回滚与台账产出；判定口径可替换（JUDGE_PY / judge_template.py），换岗位或换条件无需改流程。当用户要求在 BOSS直聘 上批量筛人 / 点收藏 / 出候选人名单时加载。
+description: 在 BOSS 直聘招聘端「推荐牛人」页按约定口径批量筛选候选人并点「收藏」，含 CDP 调试端口驱动、防封节奏与配额、每 N 人（默认 5，可设 1）一道审核闸门、被拒自动取消收藏、误点回滚与台账产出；判定口径可替换（JUDGE_PY / judge_template.py），换岗位或换条件无需改流程。当用户要求在 BOSS直聘 上批量筛人 / 点收藏 / 出候选人名单时加载。
 ---
 
 # BOSS直聘 推荐流筛人（含收藏）
@@ -45,7 +45,7 @@ curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/
 | | **A. 独立调试实例**（默认，全自动） | **B. 扩展桥**（只读筛人） |
 |---|---|---|
 | 前提 | 新建 `--user-data-dir` + `--remote-debugging-port=9333`，**并在该实例里登录一次**（Windows 必须如此：Chrome 136+ 不允许默认 profile 开调试端口，且 cookie 是 v20 App-Bound Encryption、复制过去会被删） | 用户已登录的日常 Chrome + 已装扩展（本机 `~/.dsh/browser-extension` 工具级桥，或 BrowserSkill/bsk 那套） |
-| 能力 | 采集 → 判定 → **收藏** → 每 5 人闸门 → 台账（全流程） | 采集 → 判定 → 名单/台账；**不能点收藏** |
+| 能力 | 采集 → 判定 → **收藏** → 每 N 人闸门（默认 5，`REVIEW_EVERY` 可设 1） → 台账（全流程） | 采集 → 判定 → 名单/台账；**不能点收藏** |
 | 原因 | 原生 CDP：可 `Runtime.evaluate`、可派发真实鼠标事件、可算元素 rect 与 iframe 偏移 | 工具级桥只有 15 个动作（snapshot/get_text/click/scroll/…）：点击仅支持 snapshot 序号或 CSS selector，**没有视口坐标、没有任意 JS 求值**；而卡片与「收藏」既不是 `<button>` 也不是 `<a[href]>`，snapshot 里只编号出「打招呼」→ 去点收藏就会点到打招呼 |
 | 驱动方式 | `node scripts/scan-favorite.mjs <轮次> <收藏数>` | 助手 agent 用 `browser_snapshot`/`browser_get_text` 读候选人 → 写成 `cards.jsonl`（每行 `{"card":"<卡片全文>"}`）→ `node scripts/scan-favorite.mjs --judge-run cards.jsonl`（只判定、不点收藏，产物在 `$BOSS_WORK`）→ `make_ledger.py` 出台账 |
 
@@ -59,9 +59,9 @@ curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/
 4. **风险即停**：登录页 / 安全验证 / 操作频繁 / 收藏失败率 >50% → 截图、写 `STOP_TODAY`、非零退出；当天不再跑。
 5. **隐私**：不导出手机号/微信/邮箱；**身份用推荐流卡片上的真实姓名**（`.name`，落在本机 `real_names.json`），判定器的掩码名只作兜底；卡片原文只在判定时用临时文件，判完即删。
 6. **不碰付费动作**：用户说「搜索里的人要付费」时，全程只在推荐页操作。
-7. **审核闸门**：**每累计 5 个收藏**（`state.sinceBatch`/`pendingRecords` 持久化，跨运行累计；启动时若已有满 5 条未结批会自动补结）自动停轮，产出 `review_batch_N.json` 并 `exit 42`；审核方写 `review_ok_N.json`，必须用 `approved_card_ids` + `rejected_card_ids` **覆盖全部候选**（不能用旧审批、不能只批一部分），被拒者用 `--rollback` 取消收藏后才算闭环（被拒 id 会写入 `rejected.json`，此后永久跳过、不会再收藏）（脚本会自动清理 `known_fav` 里的姓名键与对应 `card_id`；若手工在页面取消收藏，需同样清理，或直接 `--rollback` 走闭环）。未完成上一批审核不得开始下一批；不足 5 人时可 `--batch` 手动结批。
+7. **审核闸门**：**每累计 `REVIEW_EVERY` 个收藏**（默认 5，可设 1–5；设 1 = 收一个就停轮送审；env `REVIEW_EVERY` 或 config `batch.reviewEvery`，超过 5 只 WARN 并按 5）（`state.sinceBatch`/`pendingRecords` 持久化，跨运行累计；启动时若已有满 5 条未结批会自动补结）自动停轮，产出 `review_batch_N.json` 并 `exit 42`；审核方写 `review_ok_N.json`，必须用 `approved_card_ids` + `rejected_card_ids` **覆盖全部候选**（不能用旧审批、不能只批一部分），被拒者用 `--rollback` 取消收藏后才算闭环（默认 `AUTO_ROLLBACK_REJECTED=1`：接受审批时对被拒者**自动**点「取消收藏」并回退账本；浏览器不在线时写 `rollback_queue.json`，下次启动先重试）（被拒 id 会写入 `rejected.json`，此后永久跳过、不会再收藏）（脚本会自动清理 `known_fav` 里的姓名键与对应 `card_id`；若手工在页面取消收藏，需同样清理，或直接 `--rollback` 走闭环）。未完成上一批审核不得开始下一批；不足 5 人时可 `--batch` 手动结批。
 8. **不在「精选」页收藏**：「精选」是另一套富集卡片，开聊要「搜索畅聊卡」（付费资源），卡片结构与推荐流不同，在那页点收藏等于把节奏和预算放到错的地方。脚本已做硬闸：`config.batch.tabs` 里写「精选」会被忽略（`WARN`），运行中检测到当前 tab 是「精选」（`.tab-item.curr` 文案 / 「精选优质牛人」提示）→ 整轮 `SKIP 精选页`。
-9. **掩码姓名不收藏**：推荐流卡片上是**真实姓名**（`.name`，如「吴嫔」），判定器输出的是掩码（「吴**」）。身份以「真实姓名 + card_id」为准；卡片姓名若仍带 `*`（精选页就是这种「加密带星号」的名字）→ 直接 `SKIP 掩码姓名，不收藏`，因为收藏一个连姓名都核对不了的人，后面审核和回滚都没法对账。
+9. **掩码姓名不收藏**：推荐流卡片上是**真实姓名**（`.name`，如「甲某」），判定器输出的是掩码（「吴**」）。身份以「真实姓名 + card_id」为准；卡片姓名若仍带 `*`（精选页就是这种「加密带星号」的名字）→ 直接 `SKIP 掩码姓名，不收藏`，因为收藏一个连姓名都核对不了的人，后面审核和回滚都没法对账。
 10. **风险自担（开工前必须先跟用户说清）**：自动化操作真实账号**有被限流甚至封号的风险**——平台协议普遍限制自动化 / 批量 / 脚本化操作。必须由用户明确确认四件事：① 用的是**有权处置、丢了不心疼**的账号（不要主账号、不要公司主账号）；② 接受可能触发安全验证、推荐与沟通功能受限、临时封禁乃至永久封号；③ 明白本 skill **不带也不允许**任何风控绕过手段（代理池、指纹伪装、验证码识别、账号池、并发多开、模拟真人轨迹），节奏与配额下限**不允许为了跑快而放宽**；④ 候选人简历属个人信息，法律与内部合规由用户自行负责（不外传、不商用、不作非招聘用途）；⑤ 明白本 skill **不做「随机点击 / 轨迹伪装」**（随机坐标会点到「打招呼 / 联系Ta / 搜索畅聊卡」，既破坏零外联又可能产生真实费用，见 `references/troubleshooting.md` 第九节）。用户不接受任一条 → **不跑**，也不要帮忙绕过。
 
 ## 流程（按顺序，不跳步）
@@ -82,7 +82,7 @@ curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/
 
 **Step 6 收尾**：点该 wrapper 的 `.close-btn` → 轮询 8×300ms；关不掉的把仍处于 `v-leave` 的节点直接 `remove()`（日志 `overlay cleanup: removed N stuck node(s)`）→ 仍失败再在推荐帧 document 内派发 Escape → 最后才按真实 rect 兜底点击；然后 `sleep` 到收藏间隔（默认 12.5s）再下一位。
 
-**Step 7 审核闸门**：每累计 5 个收藏，脚本写 `review_batch_N.json`（只含证据字段：card_id/掩码姓名/年龄/城市/期望/c1 月数与 segments/c2 等级与 evidence/c3 月数与 segments，**不含完整卡片**）+ `digest`，并 `exit 42`。审核方逐人核 c1/c2/c3，写 `review_ok_N.json`：`{"batch":N,"digest":"<与 batch 一致>","approved_card_ids":[...],"rejected_card_ids":[...]}`。脚本启动校验：batch 序号、digest、**ap∪rj 覆盖全部候选且不重叠**；被拒者须已 `--rollback`。`batchSeq`/`sinceBatch`/`pendingRecords` 持久化，旧审批不能复用。手动结批：`node scan-favorite.mjs --batch`。
+**Step 7 审核闸门**：每累计 `REVIEW_EVERY` 个收藏（默认 5，可设 1），脚本写 `review_batch_N.json`（只含证据字段：card_id/掩码姓名/年龄/城市/期望/c1 月数与 segments/c2 等级与 evidence/c3 月数与 segments，**不含完整卡片**）+ `digest`，并 `exit 42`。审核方逐人核 c1/c2/c3，写 `review_ok_N.json`：`{"batch":N,"digest":"<与 batch 一致>","approved_card_ids":[...],"rejected_card_ids":[...]}`。脚本启动校验：batch 序号、digest、**ap∪rj 覆盖全部候选且不重叠**；被拒者须已取消收藏——`AUTO_ROLLBACK_REJECTED=1`（默认）时**接受审批即自动取消**，连不上浏览器则记 `rollback_queue.json` 并 `exit 42`，下次运行先重试；设 0 才要求手工 `--rollback`。**接受审批不必再跑采集**：`node scan-favorite.mjs --accept-only`（无浏览器、不产生新收藏）。`batchSeq`/`sinceBatch`/`pendingRecords` 持久化，旧审批不能复用。手动结批：`node scan-favorite.mjs --batch`。
 
 > **接受审核是一个独立动作**：`node scripts/scan-favorite.mjs --accept-only` 只校验并消费 `review_ok_N.json`，**不需要浏览器、也不会再收藏人**。不带它时，下一次正式启动会先自动接受，但**接受发生在配额/停线检查之前**（所以「今天收藏到顶了但最后一批还没结」不会再卡死）；`FAV_DRY_RUN=1` 时不消费审批（联调不动账本）。
 
@@ -121,6 +121,9 @@ curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/
 | `FAV_DRY_RUN` | 0 | 设 1 只判定不点收藏（联调） |
 | `APPLY_FILTER` | 1 | 每轮重放「筛选→应用→确定」；设 0 关闭 |
 | `FAV_OUT` | `<BOSS_WORK>/fav_capture.json` | 收藏列表抓取输出 |
+| `REVIEW_EVERY` | 5 | 每收藏 N 人就停轮送审（1–5；**设 1 = 收一个就审**；>5 只 WARN 并按 5） |
+| `AUTO_ROLLBACK_REJECTED` | 1 | 接受审批时对被拒者**自动取消收藏**并回退账本；0=要求手工 `--rollback` |
+| `JITTER_PCT` | 0.25 | 节奏抖动幅度（0=固定周期，上限 0.5；抖动后仍被硬下限夹紧） |
 
 ## 口径不是这三条怎么办（换岗位 / 换条件）
 
@@ -158,6 +161,7 @@ curl -L -o skill.zip https://codeload.github.com/YI163/boss-recruiting-scan/zip/
 - **重复收藏 toggle**：已收藏的人再点会取消 → `known_fav.json` 同时存 `card_id` 与 `姓名|年龄`（兼容旧数据/掩码姓名），卡片含「已收藏」也跳过；收藏成功即原子写入。
 - **姓名/日期解析**：姓名前常有活跃标签；年龄取 `N岁`；日期成对配对；教育条目跳过；PASS 用 `card_id` 对齐而不是姓名。
 - **别加「随机点击」当防封**：这个页面随机坐标很容易落在「打招呼 / 联系Ta / 搜索畅聊卡」（付费）上——违反零外联、可能真发消息或花钱；而且无意义的点击轨迹对行为模型来说并不比规律节奏更像人。要降低机械感只有两条：节奏抖动（`JITTER_PCT`）+ 停顿（`dwell`），以及**少跑**。
+- **「收一个就审」怎么开**：`REVIEW_EVERY=1`（或 config `batch.reviewEvery`）。审核没过的取消收藏是**自动**的（`AUTO_ROLLBACK_REJECTED=1` 默认）：`--accept-only` 或脚本启动接受审批时，会先对被拒者点「取消收藏」再回退账本（`state.favorites`/`sinceBatch` −1、清 `pendingRecords`/`passes.jsonl`）。**连不上浏览器时不会硬失败**：写 `rollback_queue.json` 并 `exit 42`，下次启动 `main()` 里先 `flushRollbackQueue()` 重试。注意 `connect()` 连不上会直接 `exit(2)`，所以自动回滚前用 `cdpReachable()` 探端口，别指望 try/catch 兜住。
 - **限流征兆**：连续空 feed / 无 iframe 偏移 / 异常 → 连续 3 次写 `REST_UNTIL` 停 30 分钟（**下次启动会读取并拒绝运行**）；收藏失败率 >50% 直接 `stopRisk('favorite-failure')`（截图 + STOP_TODAY）。
 - **后台任务会搬家**：单条命令跑超 600s 会被移到后台继续跑，看着像卡住；用 `job_list` 查、必要时 `job_kill` 后重启。
 
@@ -224,12 +228,15 @@ python3 scripts/make_ledger.py --work $BOSS_WORK --title 招聘筛人台账-$(da
 - [ ] 每个 PASS 都有 `card_id` + 证据；收藏以控件文案「已收藏」自证（toast 仅补充）
 - [ ] `review_batch_N.json` 都有对应 `review_ok_N.json`；未通过者已 `--rollback`
 - [ ] 台账 xlsx + md 已生成（xlsx 需 openpyxl 解释器）；用 `node scripts/favcapture.mjs` 核对，**只认 `this_round`**，别拿收藏页总条数（含历史、且懒加载）当成绩
+- [ ] 若开了 `REVIEW_EVERY=1`：每次收藏后都停轮送审，且被拒者已自动取消（看 `auto-rollback:` 日志；没取消干净时 `rollback_queue.json` 会被清空）
 - [ ] 每批 `review_ok_N.json` 都有对应 `--accept-only`／启动自动接受的日志；被拒者已 `--rollback`（账本 `state.favorites` 同步减掉）
 - [ ] 若换过口径：`judge_template.py --selftest` 与 `scan-favorite.mjs --selfcheck-judge` 均通过
 
 ## 版本
 
-- 2026-11-02 **本地补丁 5：节奏抖动（`JITTER_PCT`）+ 明确不做「随机点击」（非上游版本）**：① 轮间隔/收藏间隔改为在 `[base×(1−JITTER), base×(1+JITTER)]` 内随机（`JITTER_PCT` 默认 0.25，0=固定周期，上限 0.5），随机结果仍被 `HARD.spacingMin` / `HARD.favGapMin` 夹紧，**任何情况下不低于 15s / 12s**；② 开卡前 0.4–1.2s、点收藏前 0.25–0.9s 的随机停顿（只延后下一次真实动作，不点任何额外元素）；③ 新增 `--pacing-selftest`（抽样 12 次、打印最小/最大与硬下限，不连 CDP、不读写状态）；④ **不做「随机点击 / 轨迹伪装」**：随机坐标会命中「打招呼 / 联系Ta / 搜索畅聊卡（付费）」，破坏零外联且可能产生真实费用，见 `references/troubleshooting.md` 第九节；⑤ 参考公开研究：反爬检测的是 CDP 通道本身（`Runtime.enable` 的副作用），在 JS 层之上，点击节奏改变不了这个事实。- 2026-10-28 **本地补丁 4：精选页禁收藏 + 姓名口径改用真实姓名（非上游版本）**：①「精选」页硬闸（`config.batch.tabs` 里的「精选」被忽略并 WARN；运行中 `.tab-item.curr` 为「精选」或出现「精选优质牛人」提示 → 整轮 `SKIP 精选页`）——该页开聊要搜索畅聊卡、卡片姓名是加密掩码；②身份改用推荐流卡片上的真实姓名（`.name`），收藏成功写 `real_names.json`，审核包与台账优先用真实姓名；卡片姓名带 `*` 的候选开卡前直接跳过（`SKIP 掩码姓名`）；③`--rollback` 支持传 card_id（经 `real_names.json` 换成真实姓名）；④`--rollback` 开浮层改**元素点击优先**（`.row.name-wrap` 的 JS `click()`，坐标仅兜底）——收藏牛人页按坐标点击实测落空（`rollback: overlay not opened`）。回归实测：真跑收藏 2 人（陈琳/冯婷）→ 回滚 1 人后 `state.favorites` 2→1、`pendingRecords`/`passes.jsonl` 各减 1 条、`known_fav.json` 清掉 3 个键、站点收藏 20→19 条且 `this_round=1`（D14/D17/D18/D19 四项浏览器验证同时通过）。
+- 2026-11-02 **本地补丁 6：审核粒度可配（`REVIEW_EVERY`）+ 被拒自动取消收藏（非上游版本）**：① 闸门从「硬编码每 5 人」改为 `REVIEW_EVERY`（env 或 config `batch.reviewEvery`，1–5，默认 5，`>5` 只 WARN 并按 5）——设 1 即「收藏一个就停轮送审」；② `AUTO_ROLLBACK_REJECTED`（默认 1）：接受审批时对被拒者**自动回滚**（元素点击 `.row.name-wrap` 取消收藏 + 回退 `state.favorites`/`sinceBatch`/`pendingRecords`/`passes.jsonl`/`known_fav`）；③ 自动回滚前用 `cdpReachable()` 探端口，连不上就写 `rollback_queue.json` + `exit 42`，下次启动 `flushRollbackQueue()` 先重试；④ `--accept-only` 无浏览器接受审批；⑤ `rollback(keys, {exit:false})` 软模式。回归实测（`REVIEW_EVERY=1`）：`NOTE: reviewEvery=1` → `REVIEW_REQUIRED batch=1 (1 人)` exit 42；全 approved + `--accept-only` → accepted exit 0；一人被拒 + 无 CDP → `auto-rollback: 现在连不上 Chrome…` + `AUTO_ROLLBACK 未完成` exit 42 + 队列 1 条；`AUTO_ROLLBACK_REJECTED=0` → `REJECTED_STILL_FAVORITED` exit 42。
+- 2026-11-02 **本地补丁 5：节奏抖动（`JITTER_PCT`）+ 明确不做「随机点击」（非上游版本）**：① 轮间隔/收藏间隔改为在 `[base×(1−JITTER), base×(1+JITTER)]` 内随机（`JITTER_PCT` 默认 0.25，0=固定周期，上限 0.5），随机结果仍被 `HARD.spacingMin` / `HARD.favGapMin` 夹紧，**任何情况下不低于 15s / 12s**；② 开卡前 0.4–1.2s、点收藏前 0.25–0.9s 的随机停顿（只延后下一次真实动作，不点任何额外元素）；③ 新增 `--pacing-selftest`（抽样 12 次、打印最小/最大与硬下限，不连 CDP、不读写状态）；④ **不做「随机点击 / 轨迹伪装」**：随机坐标会命中「打招呼 / 联系Ta / 搜索畅聊卡（付费）」，破坏零外联且可能产生真实费用，见 `references/troubleshooting.md` 第九节；⑤ 参考公开研究：反爬检测的是 CDP 通道本身（`Runtime.enable` 的副作用），在 JS 层之上，点击节奏改变不了这个事实。
+- 2026-10-28 **本地补丁 4：精选页禁收藏 + 姓名口径改用真实姓名（非上游版本）**：①「精选」页硬闸（`config.batch.tabs` 里的「精选」被忽略并 WARN；运行中 `.tab-item.curr` 为「精选」或出现「精选优质牛人」提示 → 整轮 `SKIP 精选页`）——该页开聊要搜索畅聊卡、卡片姓名是加密掩码；②身份改用推荐流卡片上的真实姓名（`.name`），收藏成功写 `real_names.json`，审核包与台账优先用真实姓名；卡片姓名带 `*` 的候选开卡前直接跳过（`SKIP 掩码姓名`）；③`--rollback` 支持传 card_id（经 `real_names.json` 换成真实姓名）；④`--rollback` 开浮层改**元素点击优先**（`.row.name-wrap` 的 JS `click()`，坐标仅兜底）——收藏牛人页按坐标点击实测落空（`rollback: overlay not opened`）。回归实测：真跑收藏 2 人（甲某/乙某）→ 回滚 1 人后 `state.favorites` 2→1、`pendingRecords`/`passes.jsonl` 各减 1 条、`known_fav.json` 清掉 3 个键、站点收藏 20→19 条且 `this_round=1`（D14/D17/D18/D19 四项浏览器验证同时通过）。
 - 2026-10-28 **本地补丁 3：按「拿不到本地补丁的新人」外测报告修 24 条（非上游版本）**。报告：一个 agent 只读 GitHub 仓库、在干净沙盒里从头跑两轮，产出 `TEST-REPORT.md`（2 Blocker + 13 Major + 9 Minor）。本补丁修完：**A. 文档**（取仓库三路径：官方/gh-proxy.com 镜像/codeload zip；受管终端必须脱离启动 Chrome；登录必须选「我要招聘」；自检顺序与 PowerShell 编码；默认口径在真实卡上常 0 PASS 的警告；核对收藏只认 `this_round`；卡片城市不可信）。**B. 代码**：①`cdp.mjs` 的 `login` 改按顶层 DOM+URL+`wt2=` 判定（旧实现找推荐帧里的「退出登录」，登录成功也报 false）；②新增 `cdp.mjs navigate <url>`（文档说要打开推荐页，但此前没有该子命令）；③`cdp.mjs cards` 在收藏页回退读 `.card-item`（此前恒 `total 0`）、`shot` 改 `fromSurface:false`（默认值会挂住）；④收藏顺序真的按判定器排序（`domIndex` → `queue`），此前 changelog 声称已实现、代码仍按 DOM 顺序；⑤新增 `--accept-only`，并把「接受审批」提到配额/停线检查之前（否则当天到顶时最后一批永远结不清）；⑥`--batch` 批号取 `batchSeq`/`pendingBatch` 最大值（并发时不再重号）；⑦`--rollback` 加收藏页就绪轮询（冷启动首跑不再误报「全部未命中」），且成功回退 `state.favorites`/`sinceBatch`、清 `pendingRecords`/`passes.jsonl`（此前回滚后账本仍记着、下次还会把已回滚者送审）；⑧`make_ledger.py --out` 默认 `$BOSS_WORK`、时间转本地、缺 openpyxl 时给明确修法；⑨`favcapture.mjs` 加就绪轮询并区分 `this_round`/`historical_count`。
 - 2026-10-28 **本地补丁 2：把「点收藏」从坐标点击改成元素点击 + 浮层判据修复（非上游版本）**。实测两轮跑通（第 2 批审核 + 台账）。①`scan-favorite.mjs` 开卡改元素优先（`.row.name-wrap` 的 JS `click()` 返回 `el-click`），坐标仅兜底；②收藏改点推荐帧内 `.like-icon-and-text`，用控件文案「收藏→已收藏」自证，toast 降为辅助（旧实现靠 toast 产生过假阳性/假阴性）；③浮层判据由「帧树里有 c-resume 帧」改为「推荐帧里最后一个非 `v-leave` 的 `.boss-popup__wrapper` 且可见」——c-resume 画布帧关掉后仍常驻，是 `stale overlay` 空转的根因；④`closeOverlay` 改为点 live wrapper 的 `.close-btn` + 清除卡在 `v-leave` 的残留节点（`overlay cleanup: removed N stuck node(s)`）+ 推荐帧内派发 Escape，最后才用真实 rect 兜底；⑤主循环固定 `sleep(9000)` 改成就绪轮询（卡片数连续两次相同）；⑥新增 `references/troubleshooting.md`（白屏三因、卡住四因、点空三层、闸门卡住、为何扩展桥不能收藏、Windows 专属结论）；⑦SKILL.md 修正「收藏按钮在 shadow DOM、只能坐标点击」的错误说法，坐标表改为元素选择器，新增「两种连接方式」章节（A 独立调试实例=全自动，B 扩展桥=只读筛人）。
 - 2026-10-28 **本地 Windows 补丁（非上游版本，v1.8.2 之上）**：仅修 POSIX 路径/解释器假设，不改流程、节奏、配额、闸门与口径——①`scan-favorite.mjs` 自检临时目录改用 `os.tmpdir()`（原先写死 `/tmp/…`，Windows 上 `mkdtemp` 直接 ENOENT）；②新增解释器探测（`PYTHON_BIN` 优先，未设置时按平台探测，Windows 附加 `py` 启动器），`PYTHON_BIN` 为商店空壳时 `FATAL` 明确提示；③`scan-favorite.mjs`/`cdp.mjs`/`favcapture.mjs`/`judge.py`/`judge_template.py`/`make_ledger.py`/`strict2.py` 的默认工作目录在 Windows 改为 `%TEMP%\boss`（POSIX 仍是 `/tmp/boss`）；④新增 `README-windows.md`（环境、冒烟验收、与 macOS 的差异、补丁回滚）。验收：`judge.py --selftest 12/12`、`judge_template.py --selftest 5/5`、`scan-favorite.mjs --selfcheck-judge 6/6`。

@@ -166,7 +166,7 @@ https://static.zhipin.com/assets/sdk/apm/patas-compat.2.1.0.min.js
 | 现象 | 真实原因 | 现在的做法 |
 |---|---|---|
 | 「精选」页也能读到卡片，但一开聊就提示要用「搜索畅聊卡」 | 精选是另一套富集卡片，开聊动作是付费资源（畅聊卡），和推荐流的「收藏」不是一回事 | config.batch.tabs 里的「精选」被忽略并 WARN；运行中 .tab-item.curr 是「精选」或页面出现「精选优质牛人」提示 → 整轮 SKIP 精选页（实测精选页 .candidate-card-wrap = 0，卡在选卡阶段空转） |
-| 收藏/审核记录里全是「李**／杨**／姚**」这种加密带星号的名字 | ① 精选页的卡片名就是掩码；② 判定器 judge.py 按隐私规则把姓名统一打码，跟页面无关 | 推荐流卡片本来就有真实姓名（div.name，实测「吴嫔／谭荣康／钟嘉保」）；收藏成功写 `real_names.json`（card_id → 真实姓名），审核包带 `name_real`，台账「姓名」列优先真实姓名，--rollback 也支持传 card_id 自动换名。卡片姓名仍带 * 的候选 → 开卡前 SKIP 掩码姓名，不收藏（连姓名都核对不了的人，审核和回滚都对不上账） |
+| 收藏/审核记录里全是「李**／杨**／姚**」这种加密带星号的名字 | ① 精选页的卡片名就是掩码；② 判定器 judge.py 按隐私规则把姓名统一打码，跟页面无关 | 推荐流卡片本来就有真实姓名（div.name，实测「甲某／乙某／丙某」）；收藏成功写 `real_names.json`（card_id → 真实姓名），审核包带 `name_real`，台账「姓名」列优先真实姓名，--rollback 也支持传 card_id 自动换名。卡片姓名仍带 * 的候选 → 开卡前 SKIP 掩码姓名，不收藏（连姓名都核对不了的人，审核和回滚都对不上账） |
 
 要点：**「带星号」不是页面在加密，是判定器在打码**；但精选页确实两种都有（掩码 + 付费开聊），所以两处都要挡。
 ## 九、为什么不做「随机点击」防封（v1.8.2 本地补丁 5）
@@ -178,3 +178,12 @@ https://static.zhipin.com/assets/sdk/apm/patas-compat.2.1.0.min.js
 | 抖动会不会把节奏拖到跑不完 | 抖动只在 `[base×(1−JITTER), base×(1+JITTER)]`，结果再被硬下限夹紧；`--pacing-selftest` 可核对 | `JITTER_PCT=0.25`（默认）；要固定周期设 0 |
 
 要点：**节奏抖动是「别让机器周期精确到毫秒」，不是「骗过风控」**。真正的降险手段是少跑、人工抽检、用不心疼的账号。
+## 十、「收一个就审」与自动取消收藏
+
+| 现象 | 真因 | 处理 |
+|---|---|---|
+| 设了 `REVIEW_EVERY=1` 还是 5 人一批 | 只设了 env 没生效 / 写成了别的名字 | `REVIEW_EVERY`（env）或 config `batch.reviewEvery`；启动日志会打 `reviewEvery 1` 与 `NOTE: reviewEvery=1 —— 每收藏 1 人就停轮送审`；>5 只 WARN 并按 5 |
+| 接受审批后日志报 `FATAL 无法连接 Chrome…` exit 2 | 旧实现的自动回滚直接调 `connect()`，它自己会 `process.exit(2)`，`try/catch` 抓不到 | 已修：回滚前先 `cdpReachable()` 探端口；连不上就写 `rollback_queue.json` + `exit 42`，下次启动 `flushRollbackQueue()` 重试 |
+| 审批 accepted 了，但被拒的人还留在收藏里 | `AUTO_ROLLBACK_REJECTED=0`，或浏览器不在线导致被推迟 | 看日志 `auto-rollback:` 与 `rollback_queue.json`；手工补 `node scripts/scan-favorite.mjs --rollback "真实姓名"` |
+| 同一批反复要求审批 | `review_ok_N.json` 的 `digest` 与 `review_batch_N.json` 不一致，或 ap∪rj 没覆盖全部候选 | 用 `--batch` 生成的 digest 原样填；ap 与 rj 必须恰好覆盖全部候选、不重叠 |
+| 想只接受不采集 | 旧版接受夹在采集主流程里 | `--accept-only`：无浏览器、不产生新收藏；`FAV_DRY_RUN=1` 时不会消费审批 |

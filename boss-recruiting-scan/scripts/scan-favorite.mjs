@@ -64,11 +64,19 @@ const dwell = (lo = 300, hi = 1200) => sleep(lo + Math.floor(Math.random() * (hi
 const DAILY_FAV_CAP = Math.min(HARD.favCap, Math.max(1, num(CFG?.pacing?.dailyFavoriteCap, HARD.favCap)))
 const DAILY_CYCLE_CAP = Math.min(HARD.cycleCap, Math.max(1, num(CFG?.pacing?.dailyCycleCap, HARD.cycleCap)))
 const MAX_RUN_MS = Math.min(HARD.maxMinutes, Math.max(1, num(CFG?.pacing?.maxContinuousMinutes, HARD.maxMinutes))) * 60000
+// 审核闸门间隔：可设 1..5（默认 5）。
+// 1 = 每收藏 1 人就停轮送审（先小后大，最稳）；大于 5 会被压到 5（一次压太多人待审容易漏审）。
 const REVIEW_EVERY = (() => {
-  const v = Number(CFG?.batch?.reviewEvery || 5)
-  if (v !== 5) console.log(`WARN: reviewEvery=${v} 不受支持，已强制为 5（铁律：每 5 个收藏停轮送审，改小会破坏防封/审核节奏）`)
-  return 5
+  const raw = num(process.env.REVIEW_EVERY, num(CFG?.batch?.reviewEvery, 5))
+  let v = Math.round(raw)
+  if (!Number.isFinite(v) || v < 1) v = 1
+  if (v > 5) { console.log(`WARN: reviewEvery=${raw} 超过 5，已按 5 处理（一次压太多人待审容易漏审）`); v = 5 }
+  if (v !== 5) console.log(`NOTE: reviewEvery=${v} —— 每收藏 ${v} 人就停轮送审`)
+  return v
 })()
+// 审核没过的人：接收这批判定后是否「立即取消收藏」。
+// 1（默认）= 自动回滚被拒者，不需要人工再跑 --rollback；0 = 退回旧行为（先提示，人工回滚）。
+const AUTO_ROLLBACK_REJECTED = num(process.env.AUTO_ROLLBACK_REJECTED, CFG?.batch?.autoRollbackRejected === false ? 0 : 1) !== 0
 const TAB_OFFSET = { '推荐': 56, '精选': 116, '最新': 176 }
 // 「精选」一律不收藏：该页的富集卡片要「搜索畅聊卡」才能开聊（付费资源），
 // 且卡片/浮层结构与推荐流不同，在这里点收藏等于把节奏和预算放到错的页面上。
@@ -150,7 +158,7 @@ if (!MODE && !FAV_DRY_RUN && !state.pendingBatch && state.pendingRecords.length 
 }
 // 审核闸门：未审的 batch 必须先审核（校验 digest 与 approved ids），否则拒绝继续。
 // 抽成函数是为了支持 --accept-only：只接受上一批，不采集、不收藏、也不需要 CDP（审计缺口 D15）。
-function acceptPendingBatch() {
+async function acceptPendingBatch() {
   if (!state.pendingBatch || FAV_DRY_RUN) return false
   const n = state.pendingBatch
   const batch = readJSON(path.join(BASE, `review_batch_${n}.json`), null)
@@ -173,14 +181,25 @@ function acceptPendingBatch() {
     process.exit(42)
   }
   if (rj.length) {
-    const kf = new Set(readJSON(path.join(BASE, 'known_fav.json'), []))
     const cand = new Map((batch?.candidates || []).map(c => [c.card_id, c]))
-    const still = rj.filter(id => {
+    const stillOf = kf => rj.filter(id => {
       if (kf.has(id)) return true
       const c = cand.get(id)
       return !!(c && c.name && c.age != null && kf.has(`${c.name}|${c.age}`))
     })
-    if (still.length) { console.log(`REJECTED_STILL_FAVORITED batch=${n}: ${still.join(',')} — 先 --rollback 再继续`); process.exit(42) }
+    let still = stillOf(new Set(readJSON(path.join(BASE, 'known_fav.json'), [])))
+    // 「审核没过就立刻取消收藏」：默认 AUTO_ROLLBACK_REJECTED=1，接收这批判定后自动回滚被拒者，
+    // 不需要人工再跑 --rollback；回滚失败才留 rollback_queue.json 等下次重试。
+    if (still.length && AUTO_ROLLBACK_REJECTED) {
+      const r = await autoRollbackRejected(n, batch, still)
+      if (r.missed.length) {
+        seedRollbackQueue(r.missed)
+        console.log(`AUTO_ROLLBACK 未完成 batch=${n}：${r.missed.length} 人仍可能在收藏中 → 已写 rollback_queue.json，下次运行会先重试`)
+        process.exit(42)
+      }
+      still = stillOf(new Set(readJSON(path.join(BASE, 'known_fav.json'), [])))
+    }
+    if (still.length) { console.log(`REJECTED_STILL_FAVORITED batch=${n}: ${still.join(',')} — 先 --rollback 再继续（或设 AUTO_ROLLBACK_REJECTED=1 让它自动取消）`); process.exit(42) }
     if (rj.length) {
       const rejPath = path.join(BASE, 'rejected.json')
       const cur = readJSON(rejPath, [])
@@ -200,14 +219,14 @@ function acceptPendingBatch() {
 
 // --accept-only：只接受上一批审核结果（不采集、不收藏、不连 CDP）
 if (ACCEPT_ONLY) {
-  const accepted = acceptPendingBatch()
+  const accepted = await acceptPendingBatch()
   if (accepted) process.exit(0)
   console.log(state.pendingBatch ? `ACCEPT_ONLY: batch=${state.pendingBatch} 还不能接受（原因见上面的 REVIEW_PENDING 提示）` : 'ACCEPT_ONLY: 当前没有待审批次')
   process.exit(state.pendingBatch ? 42 : 0)
 }
 
 // 先接受上一批，再检查停线/配额
-if (!MODE && !FAV_DRY_RUN) acceptPendingBatch()
+if (!MODE && !FAV_DRY_RUN) await acceptPendingBatch()
 
 if (MODE) {
   // 纠正模式：撤回误点/结批/接受审核不受停线与配额影响（auditor X1）
@@ -548,8 +567,8 @@ function dropRolledBackRecords(key, removedIds = []) {
 }
 
 // ---------- 回滚 ----------
-async function rollback(keys) {
-  if (FAV_DRY_RUN) { console.log('FAV_DRY_RUN=1，回滚被禁用'); process.exit(1) }
+async function rollback(keys, opts = {}) {
+  if (FAV_DRY_RUN) { console.log('FAV_DRY_RUN=1，回滚被禁用'); if (opts.exit === false) return { ok: false, reason: 'dry-run', hits: 0, missed: [...keys] }; process.exit(1) }
   // 回滚接受：真实姓名 / 掩码姓名 / card_id。
   // card_id → 真实姓名（real_names.json 是本脚本在开浮层时抓到的），抓不到的再报错。
   const realNames = readJSON(path.join(BASE, 'real_names.json'), {})
@@ -561,13 +580,13 @@ async function rollback(keys) {
       if (rn) { resolved.push(rn); console.log('rollback: card_id', k, '→ 真实姓名', rn) } else bad.push(k)
     } else resolved.push(k)
   }
-  if (bad.length) { console.log('rollback: 这些 card_id 没有记录真实姓名（real_names.json 里没有），请改传真实姓名：', bad.join(',')); process.exit(2) }
+  if (bad.length) { console.log('rollback: 这些 card_id 没有记录真实姓名（real_names.json 里没有），请改传真实姓名：', bad.join(',')); if (opts.exit === false) return { ok: false, reason: 'no-real-name', hits: 0, missed: bad }; process.exit(2) }
   keys = resolved
   await connect(); await send('Page.enable'); await assertSafe()
   await send('Page.navigate', { url: 'https://www.zhipin.com/web/chat/interaction?status=9' })
   let fr = null
   for (let k = 0; k < 40; k++) { await sleep(900); fr = (await frames()).find(f => /recommend\/interaction/.test(f.url)); if (fr) break }
-  if (!fr) { console.log('rollback: 找不到收藏牛人列表'); process.exit(2) }
+  if (!fr) { console.log('rollback: 找不到收藏牛人列表'); if (opts.exit === false) return { ok: false, reason: 'no-list', hits: 0, missed: [...keys] }; process.exit(2) }
   // D14：收藏列表是懒加载的，帧出现 ≠ 列表渲染完。冷启动第一次直接读会拿到 0 张，
   // 于是被判成「全部未命中」并 exit 2（实测 7 秒误报、同一条命令重试 27 秒才成功）。这里补就绪轮询。
   let listReady = false
@@ -622,7 +641,7 @@ async function rollback(keys) {
       let openedNow = elClick === 'el-click' && (await waitOpen(24))
       if (!openedNow && elClick !== 'el-click') {
         const off = await evalTop(`(()=>{const f=[...document.querySelectorAll('iframe')].find(i=>(i.src||'').includes('/web/frame/recommend/interaction'));if(!f)return null;const b=f.getBoundingClientRect();return {x:b.left,y:b.top}})()`)
-        if (!off) { console.log('rollback: iframe offset missing'); process.exit(2) }
+        if (!off) { console.log('rollback: iframe offset missing'); if (opts.exit === false) return { ok: false, reason: 'no-offset', hits, missed: [...missed] }; process.exit(2) }
         console.log('rollback: element click 未生效，回退坐标点击', key, elClick)
         await click(off.x + rect.x + Math.min(rect.w * 0.5, 160), off.y + rect.y + Math.min(rect.h * 0.5, 22))
         openedNow = await waitOpen(16)
@@ -651,15 +670,59 @@ async function rollback(keys) {
     await sleep(2600)
     if (!progressed && (await evalIn(fr.id, 'document.querySelectorAll(".card-item").length')) <= before) break
   }
-  if (hits === 0) { console.log('rollback: 全部未命中（请确认姓名/年龄与收藏页一致）:', [...missed].join(',') || keys.join(',')); process.exit(2) }
+  if (hits === 0) { console.log('rollback: 全部未命中（请确认姓名/年龄与收藏页一致）:', [...missed].join(',') || keys.join(',')); if (opts.exit === false) return { ok: false, reason: 'all-missed', hits: 0, missed: [...missed] }; process.exit(2) }
   console.log('rollback done, hits =', hits)
+  if (opts.exit === false) return { ok: true, hits, missed: [...missed] }
   process.exit(0)
 }
 
+// ---------- 被拒者自动回滚（审核没过就取消收藏） ----------
+// connect() 连不上会直接 exit(2)，所以自动回滚前先自己探一下端口；
+// 探不到就记 rollback_queue.json，等浏览器在的时候再自动取消，不打断审核流程。
+async function cdpReachable() {
+  try { const r = await fetch(CDP + '/json/list'); return !!r.ok } catch { return false }
+}
+async function autoRollbackRejected(n, batch, ids) {
+  const realNames = readJSON(path.join(BASE, 'real_names.json'), {})
+  const cand = new Map((batch?.candidates || []).map(c => [c.card_id, c]))
+  const keys = []
+  for (const id of ids) {
+    const c = cand.get(id) || {}
+    const nm = c.name_real || realNames[id] || c.name
+    if (nm && c.age != null) keys.push(`${nm}|${c.age}`)
+    else if (nm) keys.push(String(nm))
+  }
+  if (!keys.length) { console.log(`auto-rollback: batch ${n} 的被拒记录没有可用姓名，无法自动取消收藏`); return { hits: 0, missed: ids } }
+  if (!(await cdpReachable())) { console.log('auto-rollback: 现在连不上 Chrome（' + CDP + '），先记 rollback_queue.json，等浏览器在的时候自动取消'); return { hits: 0, missed: ids } }
+  console.log(`auto-rollback: batch ${n} 有 ${ids.length} 人被拒 → 立即取消收藏: ${keys.join(', ')}`)
+  try {
+    const r = await rollback(keys, { exit: false })
+    return { hits: r.hits || 0, missed: r.missed || (r.ok ? [] : keys) }
+  } catch (e) {
+    console.log('auto-rollback 失败:', e.message)
+    return { hits: 0, missed: keys }
+  }
+}
+function seedRollbackQueue(keys) {
+  const q = readJSON(path.join(BASE, 'rollback_queue.json'), [])
+  const s = new Set([...(Array.isArray(q) ? q : []), ...keys])
+  writeJSON(path.join(BASE, 'rollback_queue.json'), [...s])
+}
+async function flushRollbackQueue() {
+  const q = readJSON(path.join(BASE, 'rollback_queue.json'), [])
+  if (!Array.isArray(q) || !q.length) return
+  if (!(await cdpReachable())) { console.log('rollback_queue:', q.length, '个待回滚，但连不上 Chrome，稍后重试'); return }
+  console.log('rollback_queue:', q.length, '个待回滚（上次自动回滚未完成），先重试')
+  const r = await rollback(q, { exit: false })
+  const left = r.missed || []
+  if (left.length) { writeJSON(path.join(BASE, 'rollback_queue.json'), left); console.log('rollback_queue: 仍有', left.length, '个未完成') }
+  else { try { fs.unlinkSync(path.join(BASE, 'rollback_queue.json')) } catch { /* ignore */ } ; console.log('rollback_queue: 已清空') }
+}
 // ---------- 主流程 ----------
 function maxCycles() { return Math.max(1, Math.min(DAILY_CYCLE_CAP, Number(process.argv[2] || 150))) }
 async function main() {
   await connect(); await send('Page.enable'); await assertSafe()
+  await flushRollbackQueue()
   const knownArr = readJSON(path.join(BASE, 'known_fav.json'), [])
   const known = new Set(knownArr)
   const knownIds = new Set(knownArr.filter(x => /^[0-9a-f]{16}$/.test(x)))
@@ -668,7 +731,7 @@ async function main() {
   const rejectedIds = new Set(rejectedArr.map(r => r.card_id))
   const rejectedNAW = new Set(rejectedArr.map(r => `${r.name}|${r.age}|${wantOf(r)}`))
   const alreadyFav = (card, cid, nameAge, want) => knownIds.has(cid) || knownKeys.has(nameAge) || /已收藏/.test(card) || rejectedIds.has(cid) || rejectedNAW.has(`${nameAge}|${want}`)
-  console.log('known_fav', known.size, 'target', targetFav(), 'dry', FAV_DRY_RUN, 'spacing', SPACING + '±' + Math.round(JITTER * 100) + '%', 'favGap', FAV_GAP + '±' + Math.round(JITTER * 100) + '%', 'tabs', TAB_X.join('/'))
+  console.log('known_fav', known.size, 'target', targetFav(), 'dry', FAV_DRY_RUN, 'spacing', SPACING + '±' + Math.round(JITTER * 100) + '%', 'favGap', FAV_GAP + '±' + Math.round(JITTER * 100) + '%', 'tabs', TAB_X.join('/'), 'reviewEvery', REVIEW_EVERY, 'autoRollback', AUTO_ROLLBACK_REJECTED ? 'on' : 'off')
   let cycle = 0, fav = 0, attempts = 0, fails = 0, emptyStreak = 0, noOffsetStreak = 0, stableN = -1, stableHits = 0
   while (cycle < maxCycles() && fav < targetFav()) {
     if (state.favorites >= DAILY_FAV_CAP) { console.log('DAILY_FAV_CAP reached'); process.exit(2) }
@@ -733,7 +796,7 @@ async function main() {
           if (alreadyFav(cards[i], cid, nameAge, p.want)) { console.log('skip known', cid, nameAge); continue }
           const rect = await evalIn(rf.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return null;c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height,txt:(n.innerText||'').slice(0,60),name:((c.querySelector('.name')||{}).innerText||'').trim()}})()`)
           if (!rect) continue
-          // 姓名口径：推荐流卡片上是真实姓名（「吴嫔」），判定器输出的是掩码（「吴**」）。
+          // 姓名口径：推荐流卡片上是真实姓名（「甲某」），判定器输出的是掩码（「吴**」）。
           // ① 身份用真实姓名 + card_id；② 卡片名字若仍是带星号的掩码（精选页就是这样），
           // 直接跳过不收藏 —— 收藏一个连姓名都核对不了的人，后面审核/回滚都没法对账。
           const cardName = String(rect.name || '').trim()

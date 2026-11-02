@@ -1,4 +1,4 @@
-# boss-recruiting-scan（v1.8.2 + 本地补丁 4）
+# boss-recruiting-scan（v1.8.2 + 本地补丁 6）
 
 ## 一句话用法（零基础，但要求必须说）
 
@@ -8,13 +8,28 @@
 
 **要求不能省**：本 skill 按你给的口径判人，不说要求就只能用默认口径，而默认口径是模板示例，真实卡片上常常 0 PASS。要求请覆盖：岗位方向、城市（只要/优先）、全职或兼职与薪资、经验年限与学历专业、硬性加分项。说漏的 AI 会反问，并先给你「口径卡 + 判定器 diff」确认后再跑。
 
-之后你只需：① 在它打开的 Chrome 里登录招聘端（选「我要招聘」）；② 每 5 人审一次名单；③ 看台账。
+之后你只需：① 在它打开的 Chrome 里登录招聘端（选「我要招聘」）；② 每 N 人（默认 5，`REVIEW_EVERY` 可设 1）审一次名单；③ 看台账。
 
 > 已知边界：推荐流卡片上是**真实姓名**（`.name`），判定器输出的是掩码（`张**`）；身份以「真实姓名 + card_id」为准，收藏成功会把真实姓名写进 `$BOSS_WORK/real_names.json`。**同名同年龄**的两个人仍可能互相误伤（回滚会清同名键、拒绝会跳过同名同岁），遇到请按 card_id 逐个核对。
 
 ## 5 分钟上手
+## 审核粒度：从「每 5 人」到「收一个就审」
 
-在 BOSS 直聘**招聘端**「推荐牛人」页按你的口径批量筛人，只点「收藏」、零外联，每 5 人停轮交审，最后出 xlsx 台账。流程与节奏是固定的（防封），**不要改**。
+默认每收藏 5 人停轮送审（写 `review_batch_N.json` 并 `exit 42`）。要「收一个就审」：
+
+```bash
+REVIEW_EVERY=1 node scripts/scan-favorite.mjs 150 5
+```
+
+审核后不用再跑采集：把 `review_ok_N.json` 写好，然后
+
+```bash
+node scripts/scan-favorite.mjs --accept-only     # 无浏览器、不产生新收藏
+```
+
+**被拒的会自动取消收藏**（`AUTO_ROLLBACK_REJECTED=1` 默认开）：接受审批时对被拒者点「取消收藏」，并回退 `state.favorites`/`sinceBatch`/`pendingRecords`/`passes.jsonl`/`known_fav`。浏览器不在线时不会硬失败——写 `rollback_queue.json` 并 `exit 42`，下次启动先重试。设 `AUTO_ROLLBACK_REJECTED=0` 则恢复手工 `--rollback`。
+
+在 BOSS 直聘**招聘端**「推荐牛人」页按你的口径批量筛人，只点「收藏」、零外联，每 N 人（默认 5，`REVIEW_EVERY` 可设 1）停轮交审，最后出 xlsx 台账。流程与节奏是固定的（防封），**不要改**。
 
 > ⚠️ **封号风险，先看这条**：本 skill 用真实浏览器操作真实账号，平台协议普遍限制自动化 / 批量 / 脚本化操作，**可能被限流、功能受限甚至封号**。请用**有权处置、丢了不心疼**的账号（不要主账号、不要公司主账号）；本项目**不提供也不允许**任何风控绕过手段（代理池、指纹伪装、验证码识别、账号池、并发多开），节奏与配额的下限是为降低风险写的，**不能为了跑快而放宽**。本项目也**不做「随机点击 / 轨迹伪装」**：随机坐标会点到「打招呼」「联系Ta」「搜索畅聊卡（付费）」，既破坏零外联又可能产生真实费用；降低机械感靠节奏抖动（`JITTER_PCT`，默认 ±25%，永不低于下限），不是乱点。候选人数据属个人信息，合规由使用者自行负责。完整免责声明见仓库根 `README.md` 的「风险与免责声明」。
 
@@ -117,7 +132,7 @@ export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-prima
 | `node scripts/scan-favorite.mjs --rollback "真实姓名"` | 取消收藏 + 清理 known_fav + 回退账本（拒绝 card_id；全未命中时按 §4.1 用 known-cleanup） |
 | `node scripts/known-cleanup.mjs "$BOSS_WORK" "张**\|32" "张伟 32岁"` | 手工取消收藏后清理 known 残留 |
 | `node scripts/scan-favorite.mjs --judge-run cards.jsonl` | 只跑判定（不连浏览器，会覆盖 BOSS_WORK 的判定输出） |
-| `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（**不要**改成 `reviewEvery` 去调闸门频率，铁律固定每 5 人） |
+| `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（**不要**改成 `reviewEvery` 去调闸门频率，铁律固定每 N 人（默认 5，`REVIEW_EVERY` 可设 1）） |
 | `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 1` | 联调：只判定不收藏 |
 | `node scripts/favcapture.mjs` | 抓收藏列表，区分 `this_round`（本轮）与 `historical_count`（历史） |
 | `python3 scripts/make_ledger.py --work $BOSS_WORK` | 台账 xlsx + md（`--out` 默认就是 `$BOSS_WORK`） |

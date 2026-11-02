@@ -52,6 +52,15 @@ try { CFG = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) } catch (e) {
 const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d)
 const SPACING = Math.max(HARD.spacingMin, num(process.env.SPACING, num(CFG?.pacing?.cycleSleepMs, 18000)))
 const FAV_GAP = Math.max(HARD.favGapMin, num(process.env.FAV_GAP, num(CFG?.pacing?.favoriteGapMs, 12500)))
+// ---------- 节奏抖动（不是绕过风控，只是去掉「精确到毫秒的机器周期」） ----------
+// 已有的 SPACING / FAV_GAP 是下限；抖动只在 [base×(1-JITTER), base×(1+JITTER)] 内取整，
+// 且任何情况下都不低于 HARD 下限。JITTER_PCT=0 可关掉（回到固定周期）。
+const JITTER = Math.min(0.5, Math.max(0, num(process.env.JITTER_PCT, 0.25)))
+const jitterOf = base => Math.round(base + (Math.random() * 2 - 1) * base * JITTER)
+const pacedSpacing = () => Math.max(HARD.spacingMin, jitterOf(SPACING))
+const pacedFavGap = () => Math.max(HARD.favGapMin, jitterOf(FAV_GAP))
+// 阅读/操作之间的小停顿（不含任何「随机点击」，只延后下一次真实动作）
+const dwell = (lo = 300, hi = 1200) => sleep(lo + Math.floor(Math.random() * (hi - lo + 1)))
 const DAILY_FAV_CAP = Math.min(HARD.favCap, Math.max(1, num(CFG?.pacing?.dailyFavoriteCap, HARD.favCap)))
 const DAILY_CYCLE_CAP = Math.min(HARD.cycleCap, Math.max(1, num(CFG?.pacing?.dailyCycleCap, HARD.cycleCap)))
 const MAX_RUN_MS = Math.min(HARD.maxMinutes, Math.max(1, num(CFG?.pacing?.maxContinuousMinutes, HARD.maxMinutes))) * 60000
@@ -89,6 +98,19 @@ const todayStr = localDay()
 const MODE = process.argv[2] === '--rollback' || process.argv[2] === '--batch'
 // 只接受上一批审核结果：不采集、不收藏、不需要 CDP，也不受停线/配额影响
 const ACCEPT_ONLY = process.argv[2] === '--accept-only'
+// 节奏自检：打印抖动后的实际间隔分布，确认永远不低于硬下限（不连 CDP、不读写 daily_state）
+if (process.argv[2] === '--pacing-selftest') {
+  const n = 12
+  const s = Array.from({ length: n }, () => pacedSpacing())
+  const g = Array.from({ length: n }, () => pacedFavGap())
+  console.log('spacing base', SPACING, '±' + Math.round(JITTER * 100) + '%', 'min', Math.min(...s), 'max', Math.max(...s), 'floor', HARD.spacingMin)
+  console.log('  samples', s.join(','))
+  console.log('favGap  base', FAV_GAP, '±' + Math.round(JITTER * 100) + '%', 'min', Math.min(...g), 'max', Math.max(...g), 'floor', HARD.favGapMin)
+  console.log('  samples', g.join(','))
+  const ok = Math.min(...s) >= HARD.spacingMin && Math.min(...g) >= HARD.favGapMin
+  console.log(ok ? 'PACING_OK' : 'PACING_FAIL')
+  process.exit(ok ? 0 : 2)
+}
 // 判定器单次运行（调试/CI 用；不读 daily_state、不受停线影响）
 if (process.argv[2] === '--judge-run') {
   const cardsFile = process.argv[3]
@@ -448,6 +470,7 @@ async function favorite(w, opts = {}) {
   if (!frame) { console.log('favorite: 推荐帧不存在，无法收藏'); return 'none' }
   const before = await favControlState(frame.id)
   let st = 'none'
+  await dwell(250, 900) // 看到浮层到点收藏之间留一点人眼扫读时间
   // 浮层右侧工具条是异步挂载的，最多等 10s 再判定「控件不存在」
   let r = 'no-el'
   for (let t = 0; t < 20; t++) {
@@ -621,7 +644,7 @@ async function rollback(keys) {
         // 里还留着已回滚的人，下一次 --batch 会把它们重新送审、台账也会多算。
         dropRolledBackRecords(key, r.removedIds || [])
       }
-      await closeOverlay(); await sleep(FAV_GAP)
+      await closeOverlay(); await sleep(pacedFavGap())
     }
     const before = cards.length
     await evalIn(fr.id, '(()=>{const s=[document.scrollingElement,document.documentElement,document.body,...document.querySelectorAll("div,section,main,ul")].filter(e=>e&&e.scrollHeight>e.clientHeight+80);s.forEach(e=>{e.scrollTop=e.scrollHeight;e.dispatchEvent(new Event("scroll",{bubbles:true}))});return s.length})()')
@@ -645,7 +668,7 @@ async function main() {
   const rejectedIds = new Set(rejectedArr.map(r => r.card_id))
   const rejectedNAW = new Set(rejectedArr.map(r => `${r.name}|${r.age}|${wantOf(r)}`))
   const alreadyFav = (card, cid, nameAge, want) => knownIds.has(cid) || knownKeys.has(nameAge) || /已收藏/.test(card) || rejectedIds.has(cid) || rejectedNAW.has(`${nameAge}|${want}`)
-  console.log('known_fav', known.size, 'target', targetFav(), 'dry', FAV_DRY_RUN, 'spacing', SPACING, 'favGap', FAV_GAP, 'tabs', TAB_X.join('/'))
+  console.log('known_fav', known.size, 'target', targetFav(), 'dry', FAV_DRY_RUN, 'spacing', SPACING + '±' + Math.round(JITTER * 100) + '%', 'favGap', FAV_GAP + '±' + Math.round(JITTER * 100) + '%', 'tabs', TAB_X.join('/'))
   let cycle = 0, fav = 0, attempts = 0, fails = 0, emptyStreak = 0, noOffsetStreak = 0, stableN = -1, stableHits = 0
   while (cycle < maxCycles() && fav < targetFav()) {
     if (state.favorites >= DAILY_FAV_CAP) { console.log('DAILY_FAV_CAP reached'); process.exit(2) }
@@ -716,7 +739,7 @@ async function main() {
           const cardName = String(rect.name || '').trim()
           if (/\*/.test(cardName)) { console.log('SKIP 掩码姓名，不收藏（无法核对身份）', cid, cardName || '(空)'); continue }
           if (/打招呼|联系Ta|畅聊|搜索畅聊卡/.test(rect.txt || '')) { console.log('ALLOWLIST BLOCK', cid); continue }
-          await sleep(600)
+          await dwell(400, 1200)
           // 打开卡片前必须确认上一张卡的浮层已关闭：残留浮层会让收藏按钮指向“上一个人”，
           // 造成“已收藏”假成功（实测出现过：报了 fav 但收藏列表里没有）。
           if (await cResumeOpen()) {
@@ -768,14 +791,14 @@ async function main() {
             console.log('favorite', realName || p.name, p.age, st, 'fav', fav, '/', targetFav())
             if (!FAV_DRY_RUN && state.pendingRecords.length >= REVIEW_EVERY) writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
             }
-          await closeOverlay(); await sleep(FAV_GAP)
+          await closeOverlay(); await sleep(pacedFavGap())
           if (attempts >= 4 && fails / attempts > 0.5) return stopRisk('favorite-failure')
           if (fav >= targetFav()) break
         }
         if (fav >= targetFav()) break
       }
       console.log('cycle', cycle, 'fav', fav, '/', targetFav())
-      await sleep(SPACING)
+      await sleep(pacedSpacing())
     } catch (e) {
       emptyStreak++; console.log('cycle', cycle, 'error', e.message)
       if (emptyStreak >= 3) failSoft('连续异常 3 次')

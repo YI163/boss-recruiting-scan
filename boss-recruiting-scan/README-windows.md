@@ -1,4 +1,4 @@
-# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁 6）
+# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁 8）
 
 本 skill 的文档与默认值原本按 macOS 写（`/tmp/boss`、`python3`、osascript）。**流程、节奏、配额、审核闸门、判定口径一律未改**，Windows 适配只做了两件事：
 
@@ -172,11 +172,31 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 
 1. 不在「精选」页收藏——那页开聊要「搜索畅聊卡」（付费），卡片姓名还是加密掩码；脚本运行中检测到精选页会整轮 `SKIP 精选页`，`config.batch.tabs` 里的「精选」也会被忽略。
 2. 掩码姓名不收藏——推荐流卡片上是真实姓名（`.name`），判定器输出才是掩码；卡片姓名带 `*` 的候选直接跳过，收藏成功写 `$BOSS_WORK\real_names.json` 供审核/台账/回滚使用。
-## 审核粒度改「收一个就审」
+## 补丁 8：审核方式、岗位轮转、每岗看多少张（Windows 版）
+
+**默认是「先审后点」，不是「每 5 人审一次」**——两件事只发生一件，别搞混：
+
+| 方式 | 怎么开 | 审核发生在 | 被拒 |
+|---|---|---|---|
+| 先审后点（默认） | `--soft-review`（提了软条件才加） | 点收藏**之前**，每张卡停下等结论 | 没收藏，直接关详情看下一张，不用回滚 |
+| 批量模式（可选） | `REVIEW_EVERY=N`（默认 5，可设 1–5） | 收藏之后，每 N 人停轮 | `AUTO_ROLLBACK_REJECTED=1` 自动取消收藏 + 回退账本 |
+
+**用户没提软条件就不要加 `--soft-review`**，纯脚本跑完，不需要二次检查。
 
 ```powershell
+# 先审后点（脚本写 soft_pack.json，等 agent 写 soft_ok.json）
+$env:SOFT_TIMEOUT_MIN = "15"          # 超时按「没通过」处理，exit 44，绝不擅自收藏
+node scripts\scan-favorite.mjs --soft-review 5
+
+# 批量模式：收一个就停轮送审（仅此模式用 REVIEW_EVERY）
 $env:REVIEW_EVERY = "1"
-node scripts\scan-favorite.mjs 150 5
+node scripts\scan-favorite.mjs 5
+node scripts\scan-favorite.mjs --accept-only     # 只接受审批，不需要浏览器
 ```
 
-审批走 `node scripts\scan-favorite.mjs --accept-only`（不需要浏览器）。被拒者默认自动取消收藏（`AUTO_ROLLBACK_REJECTED=1`）；浏览器没开时会写 `rollback_queue.json` 并 exit 42，下次启动自动重试。
+**岗位轮转 / 每岗看多少张**：`SCAN_PER_JOB`（默认 100）是**看**的张数，不是收藏数。Chrome 线的来源是岗位下拉里的每个岗位（读不到才退回 tab）；岗位「待」时详情页没有收藏按钮，脚本记 `NO_FAV_CONTROL` 跳过，**不会点「打开职位」**（那会真的发布岗位）。每次导航后岗位会跳回第一个，脚本开卡前核对、跨岗位重选。
+
+```powershell
+$env:SCAN_PER_JOB = "30"
+node scripts\scan-favorite.mjs 5
+```

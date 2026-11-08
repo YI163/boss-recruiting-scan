@@ -1,4 +1,4 @@
-# boss-recruiting-scan 交接说明（v1.8.2 + 本地补丁 4）
+# boss-recruiting-scan 交接说明（v1.8.2 + 本地补丁 8）
 
 在 BOSS 直聘**招聘端**「推荐牛人」页按约定口径筛候选人并点「收藏」的通用 skill。
 零外联：不发消息、不点「打招呼/联系Ta/搜索畅聊卡」，只有「收藏」一个动作。
@@ -29,15 +29,15 @@ cd boss-recruiting-scan
 export CDP_URL=http://127.0.0.1:9333 BOSS_WORK=/tmp/boss-<你的名字>   # 数据目录各自独立！
 
 # 空转一轮（不点收藏，先确认判定正确）
-FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 1
+FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1
 
-# 正式：最多 150 轮，收藏满 5 人自动停轮交审（exit 42）
-node scripts/scan-favorite.mjs 150 5
+# 正式（默认先审后点：提了软条件要加 --soft-review；收藏目标 5 人）
+node scripts/scan-favorite.mjs 5
 ```
-每收藏 5 人脚本会写 `review_batch_N.json` 并退出（exit 42）。审核方逐人核三条件，写 `review_ok_N.json`
-（`approved_card_ids` + `rejected_card_ids` 必须覆盖该批全部候选，digest 与 batch 一致），再继续跑。
-被拒的人先撤回：`node scripts/scan-favorite.mjs --rollback "真实姓名"`（脚本会同步清理 known_fav 姓名键与 card_id）。
-不足 5 人想结批：`node scripts/scan-favorite.mjs --batch`
+
+**审核有两种模式，别混用**：默认是「先审后点」——`--soft-review` 时脚本每张卡写 `soft_pack.json`、等 agent 写 `soft_ok.json`，通过才收藏，被拒**根本没收藏**、不需要回滚。
+只有**批量模式**（`REVIEW_EVERY`，默认 5）才是「先收藏、每 N 人停轮送审」：脚本写 `review_batch_N.json` 并 `exit 42`，审核方逐人核三条件写 `review_ok_N.json`（`approved_card_ids` + `rejected_card_ids` 必须覆盖该批全部候选，digest 与 batch 一致），被拒的人先撤回：`node scripts/scan-favorite.mjs --rollback "真实姓名"`（`AUTO_ROLLBACK_REJECTED=1` 默认会自动取消）。
+不足 N 人想结批：`node scripts/scan-favorite.mjs --batch`；只接受审批不采集：`--accept-only`。
 
 ## 5. 台账
 ```bash

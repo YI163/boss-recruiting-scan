@@ -1,4 +1,4 @@
-# boss-recruiting-scan（v1.8.2 + 本地补丁 6）
+# boss-recruiting-scan（v1.8.2 + 本地补丁 8）
 
 ## 一句话用法（零基础，但要求必须说）
 
@@ -8,28 +8,58 @@
 
 **要求不能省**：本 skill 按你给的口径判人，不说要求就只能用默认口径，而默认口径是模板示例，真实卡片上常常 0 PASS。要求请覆盖：岗位方向、城市（只要/优先）、全职或兼职与薪资、经验年限与学历专业、硬性加分项。说漏的 AI 会反问，并先给你「口径卡 + 判定器 diff」确认后再跑。
 
-之后你只需：① 在它打开的 Chrome 里登录招聘端（选「我要招聘」）；② 每 N 人（默认 5，`REVIEW_EVERY` 可设 1）审一次名单；③ 看台账。
+之后你只需：① 在它打开的 Chrome 里登录招聘端（选「我要招聘」）；② 每张卡点收藏**之前**由 AI 先看一遍（默认「先审后点」；你说了软条件就跑 `--soft-review`，没说则纯脚本自动收藏）；③ 看台账。
 
 > 已知边界：推荐流卡片上是**真实姓名**（`.name`），判定器输出的是掩码（`张**`）；身份以「真实姓名 + card_id」为准，收藏成功会把真实姓名写进 `$BOSS_WORK/real_names.json`。**同名同年龄**的两个人仍可能互相误伤（回滚会清同名键、拒绝会跳过同名同岁），遇到请按 card_id 逐个核对。
 
 ## 5 分钟上手
-## 审核粒度：从「每 5 人」到「收一个就审」
 
-默认每收藏 5 人停轮送审（写 `review_batch_N.json` 并 `exit 42`）。要「收一个就审」：
+1. 起一个带调试端口的 Chrome（§1），在里面登录招聘端、选「我要招聘」；
+2. 换成你的口径（§2 的 `JUDGE_PY`），先 `FAV_DRY_RUN=1` 干跑看判定是否符合预期；
+3. 正式跑 `node scripts/scan-favorite.mjs 5`（5 = 今天打算收藏几个人），跑完出台账（§2 第 ⑥ 步）。
 
-```bash
-REVIEW_EVERY=1 node scripts/scan-favorite.mjs 150 5
+## 审核的两种方式（默认是「先审后点」）
+
+| 方式 | 何时用 | 怎么开 | 审核发生在 | 被拒怎么处理 |
+|---|---|---|---|---|
+| **先审后点**（默认） | 用户提了软条件（「别要外包的」「看看经历是不是真的」） | `--soft-review`（或 `SOFT_REVIEW=1`） | **点收藏之前**，每张卡停下来等结论 | 根本没收藏，直接关详情看下一张，**不需要回滚** |
+| 批量模式（可选） | 用户没提软条件，或明确说「先收藏、回头再挑」 | `REVIEW_EVERY=N`（默认 5，可设 1–5） | 收藏之后，每累计 N 人停轮 | `AUTO_ROLLBACK_REJECTED=1`（默认）自动取消收藏并回退账本 |
+
+**用户没提软条件 → 不要加 `--soft-review`**，纯脚本跑完，不需要 agent 二次检查。
+
+先审后点的软审文件（脚本写、agent 读）：
+
+```json
+// $BOSS_WORK/soft_pack.json  —— 脚本写：card_id / name / age / card_text / dialog_text / ask
+// $BOSS_WORK/soft_ok.json    —— agent 写：{"card_id":"<同上>","approved":true,"reason":"..."}
 ```
 
-审核后不用再跑采集：把 `review_ok_N.json` 写好，然后
+`approved=false` 只关详情页、不收藏；**超时不等于同意**：`SOFT_TIMEOUT_MIN`（默认 15 分钟）内没结论就 `exit 44`，绝不擅自收藏。日志关键字：`SOFT_REVIEW_REQUIRED` / `SOFT_APPROVE` / `SOFT_REJECT` / `SOFT_TIMEOUT`。
+
+批量模式（仅此模式用 `REVIEW_EVERY` / `AUTO_ROLLBACK_REJECTED`）：
 
 ```bash
-node scripts/scan-favorite.mjs --accept-only     # 无浏览器、不产生新收藏
+REVIEW_EVERY=1 node scripts/scan-favorite.mjs 5    # 收一个就停轮送审
+node scripts/scan-favorite.mjs --batch             # 不足 N 人手动结批
+node scripts/scan-favorite.mjs --accept-only       # 只接受 review_ok_N.json：无浏览器、不产生新收藏
 ```
 
-**被拒的会自动取消收藏**（`AUTO_ROLLBACK_REJECTED=1` 默认开）：接受审批时对被拒者点「取消收藏」，并回退 `state.favorites`/`sinceBatch`/`pendingRecords`/`passes.jsonl`/`known_fav`。浏览器不在线时不会硬失败——写 `rollback_queue.json` 并 `exit 42`，下次启动先重试。设 `AUTO_ROLLBACK_REJECTED=0` 则恢复手工 `--rollback`。
+**被拒的会自动取消收藏**（`AUTO_ROLLBACK_REJECTED=1` 默认开）：接受审批时对被拒者点「取消收藏」，并回退 `state.favorites`/`sinceBatch`/`pendingRecords`/`passes.jsonl`/`known_fav`。浏览器不在线不会硬失败——写 `rollback_queue.json` 并 `exit 42`，下次启动先重试。设 `AUTO_ROLLBACK_REJECTED=0` 则恢复手工 `--rollback`。
 
-在 BOSS 直聘**招聘端**「推荐牛人」页按你的口径批量筛人，只点「收藏」、零外联，每 N 人（默认 5，`REVIEW_EVERY` 可设 1）停轮交审，最后出 xlsx 台账。流程与节奏是固定的（防封），**不要改**。
+## 岗位轮转与「每岗看多少张」（SCAN_PER_JOB）
+
+`SCAN_PER_JOB`（默认 **100**）是**看**的张数，不是收藏数，也不是轮次。达到就换下一个来源：
+
+- **Chrome 线**：来源 = 岗位下拉里的每个岗位（`.job-selecter-wrap`）；读不到岗位才退回 tab（推荐/最新）。
+- **ego 线**：同样是岗位下拉，两个岗位跑完即结束（`maxJobs` 限制）。
+- 岗位「待」/未发布时推荐流 `jobid=null`，详情页只有「打开职位」、**没有收藏按钮**：脚本记 `NO_FAV_CONTROL` 跳过，**不会去点「打开职位」**（那会真的把岗位发出去）。
+- 每次导航/刷新后岗位会跳回第一个，脚本在开卡前会核对岗位标签；跨岗位时重选。
+
+```bash
+SCAN_PER_JOB=30 node scripts/scan-favorite.mjs 5    # 每个岗位看 30 张
+```
+
+在 BOSS 直聘**招聘端**「推荐牛人」页按你的口径批量筛人，只点「收藏」、零外联，按 `SCAN_PER_JOB` 轮岗位、按上面的审核方式交审，最后出 xlsx 台账。流程与节奏是固定的（防封），**不要改**。
 
 > ⚠️ **封号风险，先看这条**：本 skill 用真实浏览器操作真实账号，平台协议普遍限制自动化 / 批量 / 脚本化操作，**可能被限流、功能受限甚至封号**。请用**有权处置、丢了不心疼**的账号（不要主账号、不要公司主账号）；本项目**不提供也不允许**任何风控绕过手段（代理池、指纹伪装、验证码识别、账号池、并发多开），节奏与配额的下限是为降低风险写的，**不能为了跑快而放宽**。本项目也**不做「随机点击 / 轨迹伪装」**：随机坐标会点到「打招呼」「联系Ta」「搜索畅聊卡（付费）」，既破坏零外联又可能产生真实费用；降低机械感靠节奏抖动（`JITTER_PCT`，默认 ±25%，永不低于下限），不是乱点。候选人数据属个人信息，合规由使用者自行负责。完整免责声明见仓库根 `README.md` 的「风险与免责声明」。
 
@@ -98,10 +128,10 @@ python3 scripts/judge.py --selftest                   # 12/12
 #    推荐页右上「筛选」→ 院校「留学」等 →「确定」；脚本每轮会自动重放上次筛选
 
 # ③ dry-run：只判定、不点收藏
-FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 5
+FAV_DRY_RUN=1 SCAN_PER_JOB=30 node scripts/scan-favorite.mjs 5
 
-# ④ 正式跑：≤150 轮，收藏满 5 人自动停轮交审（exit 42）
-node scripts/scan-favorite.mjs 150 5
+# ④ 正式跑：收藏目标 5 人；提了软条件就加 --soft-review（先审后点）
+node scripts/scan-favorite.mjs 5
 
 # ⑤ 审核：脚本输出 review_batch_1.json；审核后写 review_ok_1.json（见下）
 #    被拒的人先回滚：node scripts/scan-favorite.mjs --rollback "真实姓名"
@@ -126,14 +156,14 @@ export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-prima
 |---|---|
 | `node scripts/cdp.mjs state` / `cards` / `shot` | 诊断：帧结构 / 列表卡片 / 截图（`state` 里 `login`+`loginDetail` 才是登录判据） |
 | `node scripts/cdp.mjs navigate "https://www.zhipin.com/web/chat/recommend"` | 换页（v1.8.2 本地补丁 3 新增） |
-| `node scripts/scan-favorite.mjs 150 5` | 主流程（轮数 / 收藏目标） |
+| `node scripts/scan-favorite.mjs 5` | 主流程（参数 = 收藏目标；提了软条件加 `--soft-review`） |
 | `node scripts/scan-favorite.mjs --batch` | 不足 5 人时手动结批（写 review_batch，exit 42） |
 | `node scripts/scan-favorite.mjs --accept-only` | 只接受 `review_ok_N.json`（不连浏览器、不再收藏任何人） |
 | `node scripts/scan-favorite.mjs --rollback "真实姓名"` | 取消收藏 + 清理 known_fav + 回退账本（拒绝 card_id；全未命中时按 §4.1 用 known-cleanup） |
 | `node scripts/known-cleanup.mjs "$BOSS_WORK" "张**\|32" "张伟 32岁"` | 手工取消收藏后清理 known 残留 |
 | `node scripts/scan-favorite.mjs --judge-run cards.jsonl` | 只跑判定（不连浏览器，会覆盖 BOSS_WORK 的判定输出） |
-| `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（**不要**改成 `reviewEvery` 去调闸门频率，铁律固定每 N 人（默认 5，`REVIEW_EVERY` 可设 1）） |
-| `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 1` | 联调：只判定不收藏 |
+| `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（只验判定器输出格式，与审核频率无关；审核方式看「审核的两种方式」一节） |
+| `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1` | 联调：只判定不收藏 |
 | `node scripts/favcapture.mjs` | 抓收藏列表，区分 `this_round`（本轮）与 `historical_count`（历史） |
 | `python3 scripts/make_ledger.py --work $BOSS_WORK` | 台账 xlsx + md（`--out` 默认就是 `$BOSS_WORK`） |
 

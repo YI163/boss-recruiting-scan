@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // scan-favorite.mjs — BOSS 推荐流「采集 → 判定 → 开浮层 → 收藏 → 审核闸门」
 // 用法：
-//   node scan-favorite.mjs [cycles] [favTarget]             正常跑（默认 150 / 5）
+//   node scan-favorite.mjs [--soft-review] [favTarget]     正常跑（收藏目标默认 5；流程在 core/flow.mjs）
 //   FAV_DRY_RUN=1 node scan-favorite.mjs 2 1                只判定不点收藏（联调）
 //   node scan-favorite.mjs --rollback "真实姓名或card_id,..."  取消收藏
 //   node scan-favorite.mjs --batch                           把攒够的待审记录手动结批（exit 42）
 //   node scan-favorite.mjs --accept-only                     只接受上一批审核结果（不采集、不收藏、不连 CDP）
+//   node scan-favorite.mjs --soft-review 2 5                 点收藏前停一下：写 soft_pack.json，等 soft_ok.json 给 approved（超时 exit 44）
 // 环境变量：CDP_URL BOSS_WORK PYTHON_BIN JUDGE_PY SPACING FAV_GAP APPLY_FILTER SKILL_CONFIG
 // 硬约束（代码 clamp，env/config 只能更严不能更松）：轮间隔 ≥15s；收藏间隔 ≥12s；
 //   日收藏 ≤60；日轮次 ≤200；连续运行 ≤3h；遇验证/登录失效立即停并锁当天。
@@ -14,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { cleanupKnown } from './known-cleanup.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -77,6 +78,15 @@ const REVIEW_EVERY = (() => {
 // 审核没过的人：接收这批判定后是否「立即取消收藏」。
 // 1（默认）= 自动回滚被拒者，不需要人工再跑 --rollback；0 = 退回旧行为（先提示，人工回滚）。
 const AUTO_ROLLBACK_REJECTED = num(process.env.AUTO_ROLLBACK_REJECTED, CFG?.batch?.autoRollbackRejected === false ? 0 : 1) !== 0
+// 软条件审核（可选，默认关）：
+//   关着（默认）= 纯脚本：判定器过了就直接收藏，不需要 agent 介入。
+//   开着 = 每张判过的卡在「点收藏之前」停下来，把卡片全文 + 详情浮层文本写成 soft_pack.json，
+//          等 agent 写 soft_ok.json 给出 approved/reason 再继续：
+//            approved=true  → 点收藏；
+//            approved=false → 只关详情页，不收藏（下一张）。
+//   超时不等于同意：SOFT_TIMEOUT_MIN（默认 15 分钟）内没人给结论就 exit 44，绝不擅自收藏。
+const SOFT_REVIEW = process.argv.includes('--soft-review') || num(process.env.SOFT_REVIEW, 0) !== 0
+const SOFT_TIMEOUT_MS = Math.max(1, num(process.env.SOFT_TIMEOUT_MIN, 15)) * 60000
 const TAB_OFFSET = { '推荐': 56, '精选': 116, '最新': 176 }
 // 「精选」一律不收藏：该页的富集卡片要「搜索畅聊卡」才能开聊（付费资源），
 // 且卡片/浮层结构与推荐流不同，在这里点收藏等于把节奏和预算放到错的页面上。
@@ -718,159 +728,257 @@ async function flushRollbackQueue() {
   if (left.length) { writeJSON(path.join(BASE, 'rollback_queue.json'), left); console.log('rollback_queue: 仍有', left.length, '个未完成') }
   else { try { fs.unlinkSync(path.join(BASE, 'rollback_queue.json')) } catch { /* ignore */ } ; console.log('rollback_queue: 已清空') }
 }
+// ---------- 软条件审核（可选） ----------
+// 判过的卡在点收藏之前停一下，把「卡片全文 + 详情浮层文本」写成 soft_pack.json，
+// 等 agent 写 soft_ok.json：{"card_id":"…","approved":true|false,"reason":"…"}。
+// 不写就是没结论 → 超时 exit 44，绝不默认通过。
+async function softAsk(rf, cid, realName, age, cardText) {
+  let dialogText = ''
+  try {
+    dialogText = await evalIn(rf.id, `(()=>{const ds=[...document.querySelectorAll('.boss-popup__wrapper')].filter(w=>!/v-leave/.test(w.className));if(!ds.length)return '';return (ds[ds.length-1].innerText||'').replace(/\\s+/g,' ').trim().slice(0,4000)})()`)
+  } catch { /* 浮层读不到就不带 */ }
+  const packPath = path.join(BASE, 'soft_pack.json')
+  const okPath = path.join(BASE, 'soft_ok.json')
+  writeJSON(packPath, {
+    ts: new Date().toISOString(), card_id: cid, name: realName || '', age,
+    card_text: String(cardText || '').slice(0, 3000), dialog_text: dialogText,
+    ask: '看软条件：证据强度（强动词 vs 参与/了解）、经历连续性与短跳、公司是否外包/驻场、项目是否像真实做过、有无包装痕迹。approved=true 才收藏。',
+  })
+  console.log('SOFT_REVIEW_REQUIRED', realName || cid, age, '→ 见', packPath)
+  const deadline = Date.now() + SOFT_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (fs.existsSync(okPath)) {
+      let d = null
+      try { d = readJSON(okPath, null) } catch { d = null }
+      if (d && (String(d.card_id || '') === cid || d.all === true)) {
+        try { fs.unlinkSync(okPath) } catch { /* ignore */ }
+        return { approved: !!d.approved, reason: String(d.reason || '') }
+      }
+      if (d && d.card_id && String(d.card_id) !== cid) console.log('soft_ok 的 card_id 不是当前这张（期望', cid, '），已忽略')
+    }
+    await sleep(2000)
+  }
+  return { approved: null, reason: 'timeout' }
+}
+
 // ---------- 主流程 ----------
-function maxCycles() { return Math.max(1, Math.min(DAILY_CYCLE_CAP, Number(process.argv[2] || 150))) }
-async function main() {
-  await connect(); await send('Page.enable'); await assertSafe()
-  await flushRollbackQueue()
-  const knownArr = readJSON(path.join(BASE, 'known_fav.json'), [])
-  const known = new Set(knownArr)
-  const knownIds = new Set(knownArr.filter(x => /^[0-9a-f]{16}$/.test(x)))
-  const knownKeys = new Set(knownArr.filter(x => x.includes('|')))
-  const rejectedArr = readJSON(path.join(BASE, 'rejected.json'), [])
-  const rejectedIds = new Set(rejectedArr.map(r => r.card_id))
-  const rejectedNAW = new Set(rejectedArr.map(r => `${r.name}|${r.age}|${wantOf(r)}`))
-  const alreadyFav = (card, cid, nameAge, want) => knownIds.has(cid) || knownKeys.has(nameAge) || /已收藏/.test(card) || rejectedIds.has(cid) || rejectedNAW.has(`${nameAge}|${want}`)
-  console.log('known_fav', known.size, 'target', targetFav(), 'dry', FAV_DRY_RUN, 'spacing', SPACING + '±' + Math.round(JITTER * 100) + '%', 'favGap', FAV_GAP + '±' + Math.round(JITTER * 100) + '%', 'tabs', TAB_X.join('/'), 'reviewEvery', REVIEW_EVERY, 'autoRollback', AUTO_ROLLBACK_REJECTED ? 'on' : 'off')
-  let cycle = 0, fav = 0, attempts = 0, fails = 0, emptyStreak = 0, noOffsetStreak = 0, stableN = -1, stableHits = 0
-  while (cycle < maxCycles() && fav < targetFav()) {
+// ---------- A 入口：只提供 transport + io，流程本身在 core/flow.mjs ----------
+// 两个入口（A=Chrome+CDP / C=ego）共用同一份流程；这里只回答“怎么读页面、怎么点”。
+
+let rfCur = null
+let offCur = null
+
+async function frameReady(maxTries = 25) {
+  let rf = null, off = null, stableN = -1, stableHits = 0
+  for (let t = 0; t < maxTries; t++) {
+    await sleep(1200)
+    rf = await recFrame().catch(() => null)
+    off = rf ? await evalTop(`(()=>{const f=[...document.querySelectorAll('iframe')].find(i=>(i.src||'').includes('/web/frame/recommend/'));if(!f)return null;const b=f.getBoundingClientRect();return {x:b.left,y:b.top}})()`).catch(() => null) : null
+    if (!rf || !off) { stableN = -1; stableHits = 0; continue }
+    const n = await evalIn(rf.id, 'document.querySelectorAll(".candidate-card-wrap").length').catch(() => -1)
+    if (n > 0 && n === stableN) { if (++stableHits >= 2) return { rf, off } } else { stableN = n; stableHits = 0 }
+  }
+  return { rf, off }
+}
+
+async function readCards(rf) {
+  const arr = await evalIn(rf.id, `Array.from(document.querySelectorAll('.candidate-card-wrap')).map((c,i)=>({i,name:((c.querySelector('.name')||{}).innerText||'').trim(),text:(c.innerText||'').replace(/\\s+/g,' ').trim()}))`).catch(() => [])
+  return (Array.isArray(arr) ? arr : [])
+    .filter(c => c && typeof c.text === 'string' && c.text.trim())
+    .map(c => {
+      const m = /(\d{1,2})\s*岁/.exec(c.text || '')
+      return { i: c.i, name: c.name || '', age: m ? Number(m[1]) : 0, text: c.text, cid: cardId(c.text) }
+    })
+}
+
+async function currentHref() { return await evalTop('location.href').catch(() => '') }
+
+const SRC_LIST = (() => {
+  const names = TAB_NAMES.filter(n => !TABS_DISALLOWED.includes(n)).filter(n => Number.isFinite(TAB_OFFSET[n]))
+  return names.length ? names : ['推荐', '最新']
+})()
+
+// 岗位（source）读取与切换：优先按「岗位」跑（与 ego 入口一致），读不到岗位才退回 tab
+async function listJobsA() {
+  if (!rfCur) return []
+  await evalIn(rfCur.id, `(()=>{const l=document.querySelector('.job-selecter-wrap .ui-dropmenu-label');if(l)l.click();return !!l})()`).catch(() => false)
+  await sleep(800)
+  const items = await evalIn(rfCur.id, `(()=>{const its=[...document.querySelectorAll('.job-selecter-options .job-item')];return its.map((x,i)=>({i:i,text:(x.innerText||'').replace(/\\s+/g,' ').trim()}))})()`).catch(() => [])
+  await evalIn(rfCur.id, `(()=>{const l=document.querySelector('.job-selecter-wrap .ui-dropmenu-label');if(l)l.click();return true})()`).catch(() => false)
+  await sleep(400)
+  return Array.isArray(items) ? items : []
+}
+
+async function pickJobA(i) {
+  if (!rfCur) return false
+  await evalIn(rfCur.id, `(()=>{const l=document.querySelector('.job-selecter-wrap .ui-dropmenu-label');if(l)l.click();return !!l})()`).catch(() => false)
+  await sleep(800)
+  const r = await evalIn(rfCur.id, `(()=>{const its=[...document.querySelectorAll('.job-selecter-options .job-item')];const el=its[${i}];if(!el)return 'missing';el.click();return 'ok'})()`).catch(() => 'err')
+  await sleep(2600)
+  return r === 'ok'
+}
+
+const transport = {
+  async probe() {
+    if (!rfCur) { const r = await frameReady(); rfCur = r.rf; offCur = r.off }
+    const href = await currentHref()
+    const loggedIn = !/\/web\/(user|passport)\//.test(href || '')
+    if (!rfCur) return { ok: false, label: '', href, loggedIn, cards: [] }
+    const label = await evalIn(rfCur.id, `(()=>{const l=document.querySelector('.job-selecter-wrap .ui-dropmenu-label');const c=document.querySelector('.tab-item.curr');const j=l?(l.innerText||''):'';const t=c?(c.innerText||''):'';return ((j||t)||'').replace(/\\s+/g,' ').trim()})()`).catch(() => '')
+    const cards = await readCards(rfCur)
+    return { ok: true, label: label || '', href, loggedIn, cards }
+  },
+  async sources() {
+    if (!rfCur) {
+      await send('Page.navigate', { url: NAV })
+      const r0 = await frameReady(); rfCur = r0.rf; offCur = r0.off
+    }
+    const jobs = await listJobsA()
+    if (jobs.length) return jobs.map(j => ({ key: String(j.i), label: j.text, text: j.text, mode: 'job' }))
+    return SRC_LIST.map((n, i) => ({ key: String(i), label: n, text: n, mode: 'tab' }))
+  },
+  async selectSource(src) {
+    const i = Number(src.key) || 0
+    await send('Page.bringToFront')
+    await assertSafe()
+    await send('Page.navigate', { url: NAV + '?t=' + Date.now() })
+    let r = await frameReady(); rfCur = r.rf; offCur = r.off
+    if (!rfCur || !offCur) return { label: '' }
+    if (src.mode === 'job') {
+      await pickJobA(i)
+      r = await frameReady(); rfCur = r.rf; offCur = r.off
+      const lab = await evalIn(rfCur.id, `(()=>{const l=document.querySelector('.job-selecter-wrap .ui-dropmenu-label');return l?((l.innerText||'').replace(/\\s+/g,' ').trim()):''})()`).catch(() => '')
+      return { label: lab || src.label }
+    }
+    if (APPLY_FILTER) {
+      await clickTextIn(rfCur, offCur, '筛选'); await sleep(900)
+      await clickTextIn(rfCur, offCur, '应用'); await sleep(900)
+      await clickTextIn(rfCur, offCur, '确定'); await sleep(1800)
+    }
+    if (i > 0) {
+      const tabX = TAB_OFFSET[SRC_LIST[i]]
+      if (Number.isFinite(tabX)) { await click(offCur.x + tabX, offCur.y + 30); await sleep(3200) }
+      if (await cResumeOpen()) { await closeOverlay(); await sleep(600) }
+    }
+    const tabNow = await evalIn(rfCur.id, `(()=>{const c=document.querySelector('.tab-item.curr');return c?(c.innerText||'').replace(/\\s+/g,''):''})()`).catch(() => '')
+    return { label: tabNow || SRC_LIST[i] }
+  },
+  async openCard(card) {
+    if (!rfCur || !offCur) return { open: false }
+    const list = await readCards(rfCur)
+    let i = list.findIndex(c => c.cid === card.cid)
+    if (i < 0) i = card.i
+    const rect = await evalIn(rfCur.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return null;c.scrollIntoView({block:'center'});const n=c.querySelector('.row.name-wrap')||c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height,txt:(n.innerText||'').slice(0,60)}})()`)
+    if (!rect) { console.log('open: no card', card.cid); return { open: false } }
+    if (/打招呼|联系Ta|畅聊|搜索畅聊卡/.test(rect.txt || '')) { console.log('ALLOWLIST BLOCK', card.cid); return { open: false } }
+    if (await cResumeOpen()) { await closeOverlay(); for (let t = 0; t < 8 && (await cResumeOpen()); t++) await sleep(500) }
+    await dwell(400, 1200)
+    const cx = offCur.x + rect.x + Math.min(rect.w * 0.5, 160), cy = offCur.y + rect.y + Math.min(rect.h * 0.5, 22)
+    const openBy = await evalIn(rfCur.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return 'no-card';const n=c.querySelector('.row.name-wrap')||c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;if(typeof n.click!=='function')return 'no-click';n.click();return 'el-click'})()`)
+    if (openBy !== 'el-click') await click(cx, cy)
+    for (let t = 0; t < 16 && !(await cResumeOpen()); t++) await sleep(500)
+    if (!(await cResumeOpen())) { await click(cx, cy); for (let t = 0; t < 12 && !(await cResumeOpen()); t++) await sleep(500) }
+    if (!(await cResumeOpen())) { console.log('overlay not opened', card.cid); return { open: false } }
+    await assertSafe()
+    const st = await favControlState(rfCur.id)
+    const dialogText = await evalIn(rfCur.id, `(()=>{const a=[...document.querySelectorAll('.boss-popup__wrapper')].filter(w=>!/v-leave/.test(w.className));const d=a[a.length-1];return d?((d.innerText||'').replace(/\\s+/g,' ').trim().slice(0,4000)):''})()`).catch(() => '')
+    return { open: true, hasFav: st !== 'missing', favText: st === 'missing' ? '' : st, dialogText }
+  },
+  async fav() {
+    const w = (await evalTop('document.documentElement.clientWidth')) || 1431
+    const st = await favorite(w)
+    return { ok: st === 'fav', favText: st }
+  },
+  async close() { await closeOverlay() },
+  async scroll() {
+    if (!rfCur) return { cards: 0 }
+    const mv = await evalIn(rfCur.id, `(()=>{const card=document.querySelector('.candidate-card-wrap');
+let box=null;
+const cands=[];
+for (const el of [...document.querySelectorAll('div,section,main,ul')]) { const st=getComputedStyle(el); if(/(auto|scroll)/.test(st.overflowY)&&el.scrollHeight>el.clientHeight+80) cands.push(el) }
+if (card) { let n=card.parentElement; while(n){ if(cands.includes(n)){box=n;break} n=n.parentElement } }
+if (!box && cands.length) box=cands[0];
+const t=box||document.scrollingElement||document.documentElement;
+const before=t.scrollTop;
+t.scrollTop=before+900;
+const d=document.scrollingElement||document.documentElement;
+if(!box){ d.scrollTop=d.scrollTop+900; try{window.scrollBy(0,900)}catch(e){} }
+return {before:before,after:t.scrollTop,box:!!box,cands:cands.length,sh:t.scrollHeight,ch:t.clientHeight}})()`).catch(() => null)
+    if (mv) console.log('滚动加载：', JSON.stringify(mv))
+    await sleep(2400)
+    return { cards: (await readCards(rfCur)).length }
+  },
+  async wait(ms) { await sleep(ms) },
+}
+
+const known = new Set(readJSON(path.join(BASE, 'known_fav.json'), []))
+const knownIds = new Set([...known].filter(x => /^[0-9a-f]{16}$/.test(x)))
+const knownKeys = new Set([...known].filter(x => x.includes('|')))
+const rejectedArr = readJSON(path.join(BASE, 'rejected.json'), [])
+const rejectedIds = new Set(rejectedArr.map(r => r.card_id))
+const rejectedNAW = new Set(rejectedArr.map(r => `${r.name}|${r.age}|${wantOf(r)}`))
+
+const io = {
+  log: (...a) => console.log(...a),
+  judge: texts => runJudge(texts),
+  softAsk: async c => softAsk(rfCur, c.cid, c.name || '', c.age, c.text),
+  state,
+  saveState: () => {
     if (state.favorites >= DAILY_FAV_CAP) { console.log('DAILY_FAV_CAP reached'); process.exit(2) }
     if (state.cycles >= DAILY_CYCLE_CAP) { console.log('DAILY_CYCLE_CAP reached'); process.exit(2) }
     if (state.startedAt && Date.now() - state.startedAt > MAX_RUN_MS) { console.log('RUN_LIMIT 到，休息'); process.exit(2) }
-    cycle++; state.cycles++; saveState()
-    try {
-      const win = await send('Browser.getWindowForTarget')
-      if (win.bounds && win.bounds.windowState === 'minimized') await send('Browser.setWindowBounds', { windowId: win.windowId, bounds: { windowState: 'normal' } })
-      await send('Page.bringToFront')
-      await assertSafe()
-      await send('Page.navigate', { url: NAV + '?t=' + Date.now() })
-      // Windows/慢网适配：固定 9s 常常不够（iframe 未挂载或卡片还在水合，点了没反应）。
-      // 改成轮询就绪：iframe 出现 + 卡片数连续两次稳定，最多 30s；不改任何节奏/配额规则。
-      let rf = null, off = null
-      for (let t = 0; t < 25; t++) {
-        await sleep(1200)
-        rf = await recFrame().catch(() => null)
-        off = rf ? await evalTop(`(()=>{const f=[...document.querySelectorAll('iframe')].find(i=>(i.src||'').includes('/web/frame/recommend/'));if(!f)return null;const b=f.getBoundingClientRect();return {x:b.left,y:b.top}})()`).catch(() => null) : null
-        if (!rf || !off) { stableN = -1; stableHits = 0; continue }
-        const n = await evalIn(rf.id, 'document.querySelectorAll(".candidate-card-wrap").length').catch(() => -1)
-        if (n > 0 && n === stableN) { if (++stableHits >= 2) break } else { stableN = n; stableHits = 0 }
-      }
-      await assertSafe()
-      if (!rf) { emptyStreak++; console.log('cycle', cycle, 'no frame'); if (emptyStreak >= 3) failSoft('连续 3 轮找不到推荐帧'); continue }
-      if (!off) { noOffsetStreak++; console.log('cycle', cycle, 'no iframe offset'); if (noOffsetStreak >= 3) failSoft('连续 3 轮取不到 iframe 偏移'); continue }
-      noOffsetStreak = 0
-      if (APPLY_FILTER) {
-        await clickTextIn(rf, off, '筛选'); await sleep(900)
-        await clickTextIn(rf, off, '应用'); await sleep(900)
-        await clickTextIn(rf, off, '确定'); await sleep(1800)
-      }
-      for (let ti = 0; ti < TAB_X.length; ti++) {
-        if (ti > 0) { await click(off.x + TAB_X[ti], off.y + 30); await sleep(3200); if (await cResumeOpen()) { await closeOverlay(); await sleep(600) } }
-        // 硬闸：落在「精选」页就整轮跳过。该页开聊要「搜索畅聊卡」（付费），
-        // 而且卡片/浮层结构与推荐流不同，在这页点收藏会把节奏与预算用到错地方。
-        const tabNow = await evalIn(rf.id, `(()=>{const c=document.querySelector('.tab-item.curr');const t=c?(c.innerText||'').replace(/\\s+/g,''):'';
-          const b=document.body?document.body.innerText:'';return {tab:t,jx:/精选优质牛人/.test(b)}})()`).catch(() => null)
-        if (tabNow && (tabNow.tab === '精选' || (tabNow.jx && !tabNow.tab))) {
-          console.log('SKIP 精选页（开聊需搜索畅聊卡，本 skill 不在精选页收藏）tab', ti)
-          continue
-        }
-        let cards = []
-        for (let k = 0; k < 8; k++) {
-          cards = await evalIn(rf.id, 'Array.from(document.querySelectorAll(".candidate-card-wrap")).map(c=>c.innerText.replace(/\\s+/g," ").trim())')
-          if (Array.isArray(cards) && cards.length >= 5) break
-          await sleep(1000)
-        }
-        if (!Array.isArray(cards) || !cards.length) { console.log('tab', ti, 'no cards'); continue }
-        emptyStreak = 0
-        cards = cards.filter(c => typeof c === 'string' && c.trim())
-        if (!cards.length) { console.log('tab', ti, 'no valid cards'); continue }
-        const passes = runJudge(cards)
-        // D13：收藏顺序 = 判定器给出的顺序（city_rank 升序 → c3_months 降序），不是页面 DOM 顺序。
-        // 之前直接按 DOM 顺序收藏，导致「城市优先」在真正点收藏时完全不生效（实测北京候选人排第 3 个被收藏）。
-        const domIndex = new Map(cards.map((c, i) => [cardId(c), i]))
-        const queue = passes.map(p => ({ p, i: domIndex.get(p.card_id) })).filter(x => Number.isInteger(x.i))
-        if (queue.length !== passes.length) console.log('WARN', passes.length - queue.length, '条 PASS 找不到对应卡片，已跳过')
-        for (const { p, i } of queue) {
-          const cid = p.card_id
-          const nameAge = String(p.name || '').trim() + '|' + p.age
-          if (alreadyFav(cards[i], cid, nameAge, p.want)) { console.log('skip known', cid, nameAge); continue }
-          const rect = await evalIn(rf.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return null;c.scrollIntoView({block:'center'});const n=c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;const b=n.getBoundingClientRect();return {x:b.left,y:b.top,w:b.width,h:b.height,txt:(n.innerText||'').slice(0,60),name:((c.querySelector('.name')||{}).innerText||'').trim()}})()`)
-          if (!rect) continue
-          // 姓名口径：推荐流卡片上是真实姓名（「甲某」），判定器输出的是掩码（「吴**」）。
-          // ① 身份用真实姓名 + card_id；② 卡片名字若仍是带星号的掩码（精选页就是这样），
-          // 直接跳过不收藏 —— 收藏一个连姓名都核对不了的人，后面审核/回滚都没法对账。
-          const cardName = String(rect.name || '').trim()
-          if (/\*/.test(cardName)) { console.log('SKIP 掩码姓名，不收藏（无法核对身份）', cid, cardName || '(空)'); continue }
-          if (/打招呼|联系Ta|畅聊|搜索畅聊卡/.test(rect.txt || '')) { console.log('ALLOWLIST BLOCK', cid); continue }
-          await dwell(400, 1200)
-          // 打开卡片前必须确认上一张卡的浮层已关闭：残留浮层会让收藏按钮指向“上一个人”，
-          // 造成“已收藏”假成功（实测出现过：报了 fav 但收藏列表里没有）。
-          if (await cResumeOpen()) {
-            await closeOverlay()
-            for (let t = 0; t < 8 && (await cResumeOpen()); t++) await sleep(500)
-            if (await cResumeOpen()) { console.log('stale overlay, skip', cid); continue }
-          }
-          const cx = off.x + rect.x + Math.min(rect.w * 0.5, 160), cy = off.y + rect.y + Math.min(rect.h * 0.5, 22)
-          // 优先用元素自身 click 打开浮层（不依赖窗口宽度/坐标，避免点空或点歪）
-          const openBy = await evalIn(rf.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(!c)return 'no-card';
-            const n=c.querySelector('.row.name-wrap')||c.querySelector('a,[class*="name"],h3,[class*="geek-name"]')||c;
-            if(typeof n.click!=='function')return 'no-click';n.click();return 'el-click'})()`)
-          if (openBy !== 'el-click') { await click(cx, cy) }
-          // 浮层要 2.5~4s 才挂上（Windows/慢网更快失败），改成最多等 8s 再重试，避免误判+二次点击把浮层关掉
-          for (let t = 0; t < 16 && !(await cResumeOpen()); t++) await sleep(500)
-          if (!(await cResumeOpen())) {
-            await evalIn(rf.id, `(()=>{const c=document.querySelectorAll('.candidate-card-wrap')[${i}];if(c){const n=c.querySelector('.row.name-wrap')||c;n.click&&n.click()}})()`)
-            for (let t = 0; t < 16 && !(await cResumeOpen()); t++) await sleep(500)
-          }
-          if (!(await cResumeOpen())) { await click(cx, cy); for (let t = 0; t < 12 && !(await cResumeOpen()); t++) await sleep(500) }
-          if (!(await cResumeOpen())) { console.log('overlay not opened', cid); continue }
-          await assertSafe()
-          const realName = cardName
-          const w = (await evalTop('document.documentElement.clientWidth')) || 1431
-          attempts++
-          if (FAV_DRY_RUN) { console.log('DRY would favorite', realName || p.name, p.age, 'card_id', cid) }
-          else {
-            const st = await favorite(w)
-            if (st === 'fav') {
-              fav++; state.favorites++; known.add(cid); knownIds.add(cid); known.add(nameAge); knownKeys.add(nameAge)
-              if (realName) { known.add(`${realName}|${p.age}`); knownKeys.add(`${realName}|${p.age}`) }
-              writeJSON(path.join(BASE, 'known_fav.json'), [...known])
-              const favMap = readJSON(path.join(BASE, 'known_fav_map.json'), {})
-              favMap[cid] = realName ? `${realName}|${p.age}` : nameAge
-              writeJSON(path.join(BASE, 'known_fav_map.json'), favMap)
-              if (realName) {
-                const rn = readJSON(path.join(BASE, 'real_names.json'), {})
-                rn[cid] = realName
-                writeJSON(path.join(BASE, 'real_names.json'), rn)
-              }
-              appendJSONL(path.join(BASE, 'passes.jsonl'), { ts: new Date().toISOString(), real_name: realName || '', ...p })
-              log({ card_id: cid, name_masked: p.name, name_real: realName || '', age: p.age, action: 'favorited', state: st })
-              state.pendingRecords.push({ card_id: cid, name: p.name, name_real: realName || '', age: p.age, city: p.city, want: p.want, verdict: p.verdict,
-                c1_months: p.c1_months, c1_segments: p.c1_segments, c2_level: p.c2_level, c2_evidence: p.c2_evidence,
-                c3_months: p.c3_months, c3_segments: p.c3_segments, flags: p.flags })
-              state.sinceBatch = (state.sinceBatch || 0) + 1
-            } else { fails++; log({ card_id: cid, name_masked: p.name, name_real: realName || '', age: p.age, action: 'failed', state: st }) }
-            saveState()
-            console.log('favorite', realName || p.name, p.age, st, 'fav', fav, '/', targetFav())
-            if (!FAV_DRY_RUN && state.pendingRecords.length >= REVIEW_EVERY) writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
-            }
-          await closeOverlay(); await sleep(pacedFavGap())
-          if (attempts >= 4 && fails / attempts > 0.5) return stopRisk('favorite-failure')
-          if (fav >= targetFav()) break
-        }
-        if (fav >= targetFav()) break
-      }
-      console.log('cycle', cycle, 'fav', fav, '/', targetFav())
-      await sleep(pacedSpacing())
-    } catch (e) {
-      emptyStreak++; console.log('cycle', cycle, 'error', e.message)
-      if (emptyStreak >= 3) failSoft('连续异常 3 次')
-      await sleep(5000)
-    }
-  }
-  console.log('END fav', fav, 'dry', FAV_DRY_RUN)
+    saveState()
+  },
+  isKnown: c => knownIds.has(c.cid) || knownKeys.has(`${c.name}|${c.age}`) || rejectedIds.has(c.cid) || rejectedNAW.has(`${c.name}|${c.age}|`),
+  onFav: (c, brief) => {
+    const nameAge = `${c.name}|${c.age}`
+    known.add(c.cid); knownIds.add(c.cid); known.add(nameAge); knownKeys.add(nameAge)
+    writeJSON(path.join(BASE, 'known_fav.json'), [...known])
+    const favMap = readJSON(path.join(BASE, 'known_fav_map.json'), {})
+    favMap[c.cid] = nameAge
+    writeJSON(path.join(BASE, 'known_fav_map.json'), favMap)
+    const rn = readJSON(path.join(BASE, 'real_names.json'), {})
+    rn[c.cid] = c.name
+    writeJSON(path.join(BASE, 'real_names.json'), rn)
+    appendJSONL(path.join(BASE, 'passes.jsonl'), { ts: new Date().toISOString(), real_name: c.name, ...(brief || {}), card_id: c.cid, name: (brief && brief.name) || c.name, age: c.age })
+    state.pendingRecords.push({
+      card_id: c.cid, name: (brief && brief.name) || c.name, name_real: c.name, age: c.age,
+      city: brief && brief.city, want: brief && brief.want, verdict: brief && brief.verdict,
+      c1_months: brief && brief.c1_months, c1_segments: brief && brief.c1_segments,
+      c2_level: brief && brief.c2_level, c2_evidence: brief && brief.c2_evidence,
+      c3_months: brief && brief.c3_months, c3_segments: brief && brief.c3_segments, flags: brief && brief.flags,
+    })
+    state.sinceBatch = (state.sinceBatch || 0) + 1
+    saveState()
+    if (!FAV_DRY_RUN && state.pendingRecords.length >= REVIEW_EVERY) writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
+  },
+  onDecision: rec => log({ card_id: rec.card_id, action: rec.action, reason: rec.reason || '' }),
+  writeSummary: s => writeJSON(path.join(BASE, 'round-summary.json'), s),
+}
+
+async function main() {
+  const { runFlow } = await import(pathToFileURL(path.join(HERE, 'core', 'flow.mjs')).href)
+  await connect(); await send('Page.enable'); await assertSafe()
+  await flushRollbackQueue()
+  const SCAN_PER_JOB = Math.max(5, num(process.env.SCAN_PER_JOB, 100))
+  console.log('known_fav', known.size, 'target', targetFav(), 'dry', FAV_DRY_RUN,
+    'spacing', SPACING + '±' + Math.round(JITTER * 100) + '%', 'favGap', FAV_GAP + '±' + Math.round(JITTER * 100) + '%',
+    'sources', SRC_LIST.join('/'), 'scanPerJob', SCAN_PER_JOB, 'reviewEvery', REVIEW_EVERY, 'softReview', SOFT_REVIEW ? 'on' : 'off')
+  const r = await runFlow({
+    t: transport,
+    io,
+    cfg: {
+      target: targetFav(), scanPerJob: SCAN_PER_JOB, maxJobs: Math.max(SRC_LIST.length, 20), jobHint: '',
+      softReview: SOFT_REVIEW, softTimeoutMs: SOFT_TIMEOUT_MS, dryRun: FAV_DRY_RUN,
+      favCap: DAILY_FAV_CAP, maxMinutes: Math.round(MAX_RUN_MS / 60000),
+      pacedSpacing, pacedFavGap, dwell,
+    },
+  })
+  if (r && r.exit) process.exit(r.exit)
+  console.log('END fav', r.faved, 'looked', r.looked, 'noFavControl', r.noFav, 'dry', FAV_DRY_RUN)
   process.exit(0)
 }
+
 
 async function clickTextIn(rf, off, txt) {
   try {

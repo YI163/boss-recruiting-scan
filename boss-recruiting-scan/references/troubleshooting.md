@@ -166,7 +166,7 @@ https://static.zhipin.com/assets/sdk/apm/patas-compat.2.1.0.min.js
 | 现象 | 真实原因 | 现在的做法 |
 |---|---|---|
 | 「精选」页也能读到卡片，但一开聊就提示要用「搜索畅聊卡」 | 精选是另一套富集卡片，开聊动作是付费资源（畅聊卡），和推荐流的「收藏」不是一回事 | config.batch.tabs 里的「精选」被忽略并 WARN；运行中 .tab-item.curr 是「精选」或页面出现「精选优质牛人」提示 → 整轮 SKIP 精选页（实测精选页 .candidate-card-wrap = 0，卡在选卡阶段空转） |
-| 收藏/审核记录里全是「李**／杨**／姚**」这种加密带星号的名字 | ① 精选页的卡片名就是掩码；② 判定器 judge.py 按隐私规则把姓名统一打码，跟页面无关 | 推荐流卡片本来就有真实姓名（div.name，实测「甲某／乙某／丙某」）；收藏成功写 `real_names.json`（card_id → 真实姓名），审核包带 `name_real`，台账「姓名」列优先真实姓名，--rollback 也支持传 card_id 自动换名。卡片姓名仍带 * 的候选 → 开卡前 SKIP 掩码姓名，不收藏（连姓名都核对不了的人，审核和回滚都对不上账） |
+| 收藏/审核记录里全是「李**／杨**／姚**」这种加密带星号的名字 | ① 精选页的卡片名就是掩码；② 判定器 judge.py 按隐私规则把姓名统一打码，跟页面无关 | 推荐流卡片本来就有真实姓名（div.name，实测「吴嫔／谭荣康／钟嘉保」）；收藏成功写 `real_names.json`（card_id → 真实姓名），审核包带 `name_real`，台账「姓名」列优先真实姓名，--rollback 也支持传 card_id 自动换名。卡片姓名仍带 * 的候选 → 开卡前 SKIP 掩码姓名，不收藏（连姓名都核对不了的人，审核和回滚都对不上账） |
 
 要点：**「带星号」不是页面在加密，是判定器在打码**；但精选页确实两种都有（掩码 + 付费开聊），所以两处都要挡。
 ## 九、为什么不做「随机点击」防封（v1.8.2 本地补丁 5）
@@ -178,7 +178,9 @@ https://static.zhipin.com/assets/sdk/apm/patas-compat.2.1.0.min.js
 | 抖动会不会把节奏拖到跑不完 | 抖动只在 `[base×(1−JITTER), base×(1+JITTER)]`，结果再被硬下限夹紧；`--pacing-selftest` 可核对 | `JITTER_PCT=0.25`（默认）；要固定周期设 0 |
 
 要点：**节奏抖动是「别让机器周期精确到毫秒」，不是「骗过风控」**。真正的降险手段是少跑、人工抽检、用不心疼的账号。
-## 十、「收一个就审」与自动取消收藏
+## 十、批量模式：「收一个就审」与自动取消收藏（**仅批量模式**）
+
+> 这一节整节只适用于「先收藏、后审核」的批量模式（`REVIEW_EVERY`）。**默认流程是先审后点**，被拒的人根本没被收藏，不需要回滚——别把两套机制串成一个。
 
 | 现象 | 真因 | 处理 |
 |---|---|---|
@@ -187,3 +189,34 @@ https://static.zhipin.com/assets/sdk/apm/patas-compat.2.1.0.min.js
 | 审批 accepted 了，但被拒的人还留在收藏里 | `AUTO_ROLLBACK_REJECTED=0`，或浏览器不在线导致被推迟 | 看日志 `auto-rollback:` 与 `rollback_queue.json`；手工补 `node scripts/scan-favorite.mjs --rollback "真实姓名"` |
 | 同一批反复要求审批 | `review_ok_N.json` 的 `digest` 与 `review_batch_N.json` 不一致，或 ap∪rj 没覆盖全部候选 | 用 `--batch` 生成的 digest 原样填；ap 与 rj 必须恰好覆盖全部候选、不重叠 |
 | 想只接受不采集 | 旧版接受夹在采集主流程里 | `--accept-only`：无浏览器、不产生新收藏；`FAV_DRY_RUN=1` 时不会消费审批 |
+
+## 十一、「先审后点」还是「批量模式」——最容易被搞混的一对（本地补丁 8）
+
+这两件事**同一时间只会发生一件**，混用就会出现「我让他收藏前自动检查，skill 里却在每 5 个人自动审核」这种前后矛盾。对照表：
+
+| | 先审后点（默认） | 批量模式（可选） |
+|---|---|---|
+| 谁决定 | agent 逐张判 | 人/agent 按批审 `review_batch_N.json` |
+| 触发开关 | `--soft-review` 或 `SOFT_REVIEW=1` | `REVIEW_EVERY=N`（仅此模式生效） |
+| 审核时机 | **点收藏之前** | 收藏之后 |
+| 交接文件 | 脚本写 `soft_pack.json` → agent 写 `soft_ok.json` | 脚本写 `review_batch_N.json` → 人写 `review_ok_N.json` |
+| 被拒结果 | 没收藏，关详情页看下一张；**不需要回滚** | 已收藏，需 `--rollback`（或 `AUTO_ROLLBACK_REJECTED=1` 自动取消） |
+| 超时 | `SOFT_TIMEOUT_MIN`（默认 15 分钟）→ `exit 44`，绝不擅自收藏 | 无超时概念，等人写 `review_ok_N.json` |
+
+常见误用与后果：
+
+| 现象 | 真因 | 处理 |
+|---|---|---|
+| 加了 `--soft-review` 却还在等 `review_batch_N.json` | 两套审核机制串了：先审后点模式下**不会**产生批次文件 | 先审后点看 `soft_pack.json`/`soft_ok.json`；批量模式才看 `review_batch_*` |
+| 用户只提了硬条件，脚本却停下来等软审 | 自己多加 `--soft-review` | 用户没提软条件 → 不加该参数，纯脚本跑完 |
+| `SOFT_TIMEOUT … exit 44` 后收藏栏多了一个人 | 超时被当成「同意」 | 不会：超时按未通过处理并退出；若真多了人，是别的原因（查 `decisions.jsonl`） |
+| 软审文件写了不生效 | `card_id` 与 `soft_pack.json` 不一致（脚本删除过一次后重写包） | `soft_ok.json` 的 `card_id` 必须与当前 `soft_pack.json` 完全一致；也可写 `all:true` 一次性放行 |
+
+**岗位轮转与「每岗看多少张」**（`SCAN_PER_JOB`，默认 100，是**看**的张数不是收藏数）：
+
+| 现象 | 真因 | 处理 |
+|---|---|---|
+| 只跑第一个岗位就结束 | 旧版本来源只有 tab | 现在来源是岗位下拉（`.job-selecter-wrap`）：每个岗位看到 `SCAN_PER_JOB` 张或连续 3 次没新卡就换下一个；Chrome 线 `maxJobs=20`，ego 线 `maxJobs` 由参数给 |
+| 明明有卡片却一直 `NO_FAV_CONTROL` | 岗位状态是「待」（未发布）→ 推荐流 `jobid=null` → 详情页只有「打开职位」，没有收藏按钮 | 这是账号侧状态，不是脚本 bug；脚本记录跳过、**不点「打开职位」**（点了会真的发布岗位）。要收藏必须先把岗位发布/在招 |
+| 每次刷新后岗位都变回第一个 | 页面自身行为：`Page.navigate`/重载后岗位选择恢复第一项 | 脚本每次 `selectSource` 都重新选岗位并在开卡前核对标签（`.ui-dropmenu-label`） |
+| 两个岗位都跑完但没收藏到人 | `target` 已满足，或全都 `NO_FAV_CONTROL` | 看 `round-summary.json` 的 `jobs[].screened/faved` 与 `noFav`；岗位在招后才可能真收藏 |

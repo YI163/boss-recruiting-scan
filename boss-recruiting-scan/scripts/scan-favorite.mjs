@@ -158,7 +158,7 @@ const saveState = () => writeJSON(statePath, state)
 if (state.schemaVersion !== 2) {
   const legacyPending = (state.pendingRecords || []).length
   if (!BATCH_REVIEW && legacyPending) console.log('MIGRATE clear legacy pendingRecords', legacyPending)
-  if (!BATCH_REVIEW) state.pendingRecords = []
+  if (!BATCH_REVIEW) { state.pendingRecords = []; state.sinceBatch = 0 }
   state.schemaVersion = 2
   saveState()
 }

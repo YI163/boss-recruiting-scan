@@ -20,7 +20,7 @@
 cp scripts/judge_template.py my_judge.py
 # 编辑 my_judge.py：CONFIG 里的关键词/排除词/门槛月数/城市偏好；
 #                  judge_card() 里的判定组合（任意条件的与/或/权重）
-JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 150 5
+JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 5
 ```
 
 `judge_template.py` 开箱能跑（自检 `python3 scripts/judge_template.py --selftest` → **5/5**，覆盖「年龄在首 token」「缺年龄」两种边界），它做了这些事：
@@ -42,11 +42,11 @@ JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 150 5
 
 ```bash
 JUDGE_PY=/path/my_judge.py          # 默认用 python3 执行
-node scripts/scan-favorite.mjs 150 5
+node scripts/scan-favorite.mjs 5
 
 # 非 Python 判定器：必须显式指定解释器（否则 .js/.sh 会被 python3 解析而报 SyntaxError）
-PYTHON_BIN=node JUDGE_PY=$PWD/my_judge.js node scripts/scan-favorite.mjs 150 5
-PYTHON_BIN=bash JUDGE_PY=$PWD/my_judge.sh node scripts/scan-favorite.mjs 150 5
+PYTHON_BIN=node JUDGE_PY=$PWD/my_judge.js node scripts/scan-favorite.mjs 5
+PYTHON_BIN=bash JUDGE_PY=$PWD/my_judge.sh node scripts/scan-favorite.mjs 5
 ```
 
 **输入**：`argv[1]` 指向一个 JSONL 临时文件，每行：
@@ -138,7 +138,7 @@ def judge_card(card):
 ## 换完口径后必做
 
 1. `python3 my_judge.py --selftest`（若沿用模板自检）
-2. `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 1` 跑 1 轮，确认输出里有 `DRY would favorite 张** 32 card_id …`
+2. `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1` 跑 1 轮，确认输出里有 `DRY would favorite 张** 32 card_id …`
 3. 人工抽 3–5 张卡对账（判对/判错各记一条，写回 `references/criteria.md`）
 4. 再正式跑；台账里的「通过名单」以判定器输出为准，出现分歧先修判定器再收藏
 

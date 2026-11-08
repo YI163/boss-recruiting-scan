@@ -67,6 +67,7 @@ export async function runFlow({ t, io, cfg }) {
     if (state.favorites >= C.favCap) { log(`DAILY_FAV_CAP(${C.favCap}) 已达上限，停止`); exit = 5; break; }
     if (Date.now() - startedAt > C.maxMinutes * 60000) { log(`MAX_MINUTES(${C.maxMinutes}) 已达上限，停止`); exit = 5; break; }
 
+    if (/精选/.test(String(job.label || job.text || ""))) { log("SKIP_SOURCE 精选页（开聊需搜索畅聊卡，不在精选页收藏）：" + (job.label || job.text)); continue; }
     const sel = await t.selectSource(job);
     log(`▶ 岗位：${sel.label || job.text || job.key}（计划看 ${C.scanPerJob} 张）`);
     let screened = 0, idle = 0;
@@ -102,6 +103,7 @@ export async function runFlow({ t, io, cfg }) {
       for (const c of queue) {
         if (faved >= C.target) break;
         if (state.favorites >= C.favCap) { exit = 5; break; }
+        if (/\*/.test(String(c.name || ""))) { skipped++; log("SKIP 掩码姓名（无法核对身份）：" + (c.name || c.cid)); io.onDecision({ card_id: c.cid, name: c.name, action: "skip", reason: "masked-name" }); continue; }
         const ov = await t.openCard(c);
         if (!ov || !ov.open) { log("open failed", c.name || c.cid); skipped++; continue; }
         if (!ov.hasFav) {

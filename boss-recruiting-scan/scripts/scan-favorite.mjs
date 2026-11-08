@@ -2,11 +2,11 @@
 // scan-favorite.mjs — BOSS 推荐流「采集 → 判定 → 开浮层 → 收藏 → 审核闸门」
 // 用法：
 //   node scan-favorite.mjs [--soft-review] [favTarget]     正常跑（收藏目标默认 5；流程在 core/flow.mjs）
-//   FAV_DRY_RUN=1 node scan-favorite.mjs 2 1                只判定不点收藏（联调）
+//   FAV_DRY_RUN=1 node scan-favorite.mjs 1                只判定不点收藏（联调）
 //   node scan-favorite.mjs --rollback "真实姓名或card_id,..."  取消收藏
 //   node scan-favorite.mjs --batch                           把攒够的待审记录手动结批（exit 42）
 //   node scan-favorite.mjs --accept-only                     只接受上一批审核结果（不采集、不收藏、不连 CDP）
-//   node scan-favorite.mjs --soft-review 2 5                 点收藏前停一下：写 soft_pack.json，等 soft_ok.json 给 approved（超时 exit 44）
+//   node scan-favorite.mjs --soft-review 5                 点收藏前停一下：写 soft_pack.json，等 soft_ok.json 给 approved（超时 exit 44）
 // 环境变量：CDP_URL BOSS_WORK PYTHON_BIN JUDGE_PY SPACING FAV_GAP APPLY_FILTER SKILL_CONFIG
 // 硬约束（代码 clamp，env/config 只能更严不能更松）：轮间隔 ≥15s；收藏间隔 ≥12s；
 //   日收藏 ≤60；日轮次 ≤200；连续运行 ≤3h；遇验证/登录失效立即停并锁当天。
@@ -87,6 +87,9 @@ const AUTO_ROLLBACK_REJECTED = num(process.env.AUTO_ROLLBACK_REJECTED, CFG?.batc
 //   超时不等于同意：SOFT_TIMEOUT_MIN（默认 15 分钟）内没人给结论就 exit 44，绝不擅自收藏。
 const SOFT_REVIEW = process.argv.includes('--soft-review') || num(process.env.SOFT_REVIEW, 0) !== 0
 const SOFT_TIMEOUT_MS = Math.max(1, num(process.env.SOFT_TIMEOUT_MIN, 15)) * 60000
+// BATCH_REVIEW（可选）：只在「不做逐张软审」时生效的批量闸门。默认关闭。
+// SOFT_REVIEW=1 时强制关闭（两种审核机制互斥）。
+const BATCH_REVIEW = !SOFT_REVIEW && num(process.env.BATCH_REVIEW, num(CFG?.batch?.batchReview, 0)) !== 0
 const TAB_OFFSET = { '推荐': 56, '精选': 116, '最新': 176 }
 // 「精选」一律不收藏：该页的富集卡片要「搜索畅聊卡」才能开聊（付费资源），
 // 且卡片/浮层结构与推荐流不同，在这里点收藏等于把节奏和预算放到错的页面上。
@@ -163,7 +166,7 @@ const quotaHit = state.favorites >= DAILY_FAV_CAP ? 'DAILY_FAV_CAP(' + state.fav
 // 顺序反了会出现：当天收藏到顶 → 先被 RUN_LIMIT 拦下 → 最后一批永远结不清（审计缺口 D16）。
 
 // 中断恢复：已有满 5 条待审记录但没生成 batch（上次在 closeOverlay/退出时被打断）
-if (!MODE && !FAV_DRY_RUN && !state.pendingBatch && state.pendingRecords.length >= REVIEW_EVERY) {
+if (!MODE && !FAV_DRY_RUN && BATCH_REVIEW && !state.pendingBatch && state.pendingRecords.length >= REVIEW_EVERY) {
   writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
 }
 // 审核闸门：未审的 batch 必须先审核（校验 digest 与 approved ids），否则拒绝继续。
@@ -246,11 +249,16 @@ if (MODE) {
   if (restHit) { console.log('REST_UNTIL 未到，休息中：', new Date(restHit).toISOString()); process.exit(2) }
   if (quotaHit) { console.log(quotaHit, '已达上限'); process.exit(2) }
 }
-function targetFav() { return Math.max(1, Number(process.argv[3] || 5)) }
+let TARGET_FAV = (() => {
+  const pos = process.argv.slice(2).filter(a => !String(a).startsWith('-'))
+  const n = Number(pos[pos.length - 1])
+  return Math.max(1, Math.round(Number.isFinite(n) && n > 0 ? n : 5))
+})()
+function targetFav() { return TARGET_FAV }
 if (!MODE && targetFav() > DAILY_FAV_CAP - state.favorites) {
   const rem = Math.max(1, DAILY_FAV_CAP - state.favorites)
   console.log(`WARN: TARGET ${targetFav()} 超过今日剩余额度（剩 ${DAILY_FAV_CAP - state.favorites}），自动夹到 ${rem}`)
-  process.argv[3] = String(rem)
+  TARGET_FAV = rem
 }
 saveState()
 
@@ -950,7 +958,7 @@ const io = {
     })
     state.sinceBatch = (state.sinceBatch || 0) + 1
     saveState()
-    if (!FAV_DRY_RUN && state.pendingRecords.length >= REVIEW_EVERY) writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
+    if (!FAV_DRY_RUN && BATCH_REVIEW && state.pendingRecords.length >= REVIEW_EVERY) writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
   },
   onDecision: rec => log({ card_id: rec.card_id, action: rec.action, reason: rec.reason || '' }),
   writeSummary: s => writeJSON(path.join(BASE, 'round-summary.json'), s),

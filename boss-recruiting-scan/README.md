@@ -18,14 +18,14 @@
 2. 换成你的口径（§2 的 `JUDGE_PY`），先 `FAV_DRY_RUN=1` 干跑看判定是否符合预期；
 3. 正式跑 `node scripts/scan-favorite.mjs 5`（5 = 今天打算收藏几个人），跑完出台账（§2 第 ⑥ 步）。
 
-## 审核的两种方式（默认是「先审后点」）
+## 审核的三种状态（默认什么都不做，两种可选模式互斥）
 
 | 方式 | 何时用 | 怎么开 | 审核发生在 | 被拒怎么处理 |
 |---|---|---|---|---|
-| **先审后点**（默认） | 用户提了软条件（「别要外包的」「看看经历是不是真的」） | `--soft-review`（或 `SOFT_REVIEW=1`） | **点收藏之前**，每张卡停下来等结论 | 根本没收藏，直接关详情看下一张，**不需要回滚** |
-| 批量模式（可选） | 用户没提软条件，或明确说「先收藏、回头再挑」 | `REVIEW_EVERY=N`（默认 5，可设 1–5） | 收藏之后，每累计 N 人停轮 | `AUTO_ROLLBACK_REJECTED=1`（默认）自动取消收藏并回退账本 |
+| **纯脚本**（默认） | 用户没提软条件、也没说要「回头再挑」 | 不加任何开关 | 不审 | — |
+| **批量模式**（显式开启） | 明确说「先收藏、回头再挑」 | `BATCH_REVIEW=1` + `REVIEW_EVERY=N`（默认 5） | 收藏之后，每累计 N 人停轮 | `AUTO_ROLLBACK_REJECTED=1`（默认）自动取消收藏并回退账本 |
 
-**用户没提软条件 → 不要加 `--soft-review`**，纯脚本跑完，不需要 agent 二次检查。
+**用户没提软条件 → 不要加 `--soft-review`**，默认就是纯脚本，不产生任何批次文件；想「先收藏、回头再挑」才加 `BATCH_REVIEW=1`。
 
 先审后点的软审文件（脚本写、agent 读）：
 
@@ -36,10 +36,10 @@
 
 `approved=false` 只关详情页、不收藏；**超时不等于同意**：`SOFT_TIMEOUT_MIN`（默认 15 分钟）内没结论就 `exit 44`，绝不擅自收藏。日志关键字：`SOFT_REVIEW_REQUIRED` / `SOFT_APPROVE` / `SOFT_REJECT` / `SOFT_TIMEOUT`。
 
-批量模式（仅此模式用 `REVIEW_EVERY` / `AUTO_ROLLBACK_REJECTED`）：
+批量模式（仅此模式用 `BATCH_REVIEW` / `REVIEW_EVERY` / `AUTO_ROLLBACK_REJECTED`；与 `--soft-review` 互斥）：
 
 ```bash
-REVIEW_EVERY=1 node scripts/scan-favorite.mjs 5    # 收一个就停轮送审
+BATCH_REVIEW=1 REVIEW_EVERY=1 node scripts/scan-favorite.mjs 5    # 收一个就停轮送审
 node scripts/scan-favorite.mjs --batch             # 不足 N 人手动结批
 node scripts/scan-favorite.mjs --accept-only       # 只接受 review_ok_N.json：无浏览器、不产生新收藏
 ```
@@ -48,7 +48,7 @@ node scripts/scan-favorite.mjs --accept-only       # 只接受 review_ok_N.json�
 
 ## 岗位轮转与「每岗看多少张」（SCAN_PER_JOB）
 
-`SCAN_PER_JOB`（默认 **100**）是**看**的张数，不是收藏数，也不是轮次。达到就换下一个来源：
+`SCAN_PER_JOB`（默认 **100**，小于 5 会被夹到 5）是**看**的张数，不是收藏数，也不是轮次。达到就换下一个来源：
 
 - **Chrome 线**：来源 = 岗位下拉里的每个岗位（`.job-selecter-wrap`）；读不到岗位才退回 tab（推荐/最新）。
 - **ego 线**：同样是岗位下拉，两个岗位跑完即结束（`maxJobs` 限制）。
@@ -133,8 +133,8 @@ FAV_DRY_RUN=1 SCAN_PER_JOB=30 node scripts/scan-favorite.mjs 5
 # ④ 正式跑：收藏目标 5 人；提了软条件就加 --soft-review（先审后点）
 node scripts/scan-favorite.mjs 5
 
-# ⑤ 审核：脚本输出 review_batch_1.json；审核后写 review_ok_1.json（见下）
-#    被拒的人先回滚：node scripts/scan-favorite.mjs --rollback "真实姓名"
+# ⑤ 审核：这一条只对批量模式（BATCH_REVIEW=1）成立——脚本输出 review_batch_1.json，审核后写 review_ok_1.json；纯脚本/先审后点模式没有这一步
+#    批量模式下被拒的人需要回滚：node scripts/scan-favorite.mjs --rollback "真实姓名"
 #    只想接受审批（不再收藏人、不连浏览器）：node scripts/scan-favorite.mjs --accept-only
 
 # ⑥ 出台账（用带 openpyxl 的解释器；不传 --out 就写到 $BOSS_WORK）
@@ -156,10 +156,10 @@ export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-prima
 |---|---|
 | `node scripts/cdp.mjs state` / `cards` / `shot` | 诊断：帧结构 / 列表卡片 / 截图（`state` 里 `login`+`loginDetail` 才是登录判据） |
 | `node scripts/cdp.mjs navigate "https://www.zhipin.com/web/chat/recommend"` | 换页（v1.8.2 本地补丁 3 新增） |
-| `node scripts/scan-favorite.mjs 5` | 主流程（参数 = 收藏目标；提了软条件加 `--soft-review`） |
+| `node scripts/scan-favorite.mjs 5` | 主流程（参数 = 收藏目标；提了软条件加 `--soft-review`；要批量模式加 `BATCH_REVIEW=1`） |
 | `node scripts/scan-favorite.mjs --batch` | 不足 5 人时手动结批（写 review_batch，exit 42） |
 | `node scripts/scan-favorite.mjs --accept-only` | 只接受 `review_ok_N.json`（不连浏览器、不再收藏任何人） |
-| `node scripts/scan-favorite.mjs --rollback "真实姓名"` | 取消收藏 + 清理 known_fav + 回退账本（拒绝 card_id；全未命中时按 §4.1 用 known-cleanup） |
+| `node scripts/scan-favorite.mjs --rollback "真实姓名"` | 取消收藏 + 清理 known_fav + 回退账本（真实姓名或 card_id 都行；全未命中时按 §4.1 用 known-cleanup） |
 | `node scripts/known-cleanup.mjs "$BOSS_WORK" "张**\|32" "张伟 32岁"` | 手工取消收藏后清理 known 残留 |
 | `node scripts/scan-favorite.mjs --judge-run cards.jsonl` | 只跑判定（不连浏览器，会覆盖 BOSS_WORK 的判定输出） |
 | `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（只验判定器输出格式，与审核频率无关；审核方式看「审核的两种方式」一节） |
@@ -173,7 +173,7 @@ export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-prima
 |---|---|
 | 0 | 正常结束（达标/空跑） |
 | 2 | 前置条件/契约错误（CDP 连不上、judge 失败或输出不合 schema、配额/TARGET 非法等）——看 stdout 的 `FATAL` 行 |
-| 1 | 用法错误 / dry-run 拒绝执行某动作（如 `FAV_DRY_RUN=1 --rollback`）、`--judge-run` 文件不存在（v1.8.1 起改为 exit 2） |
+| 2 | 用法错误（含 `FAV_DRY_RUN=1 --rollback`、`--judge-run` 文件不存在）——v1.8.1 起统一为 2，不再用 1 |
 | 42 | 到了审核闸门：先审 `review_batch_N.json`，写 `review_ok_N.json`，再继续 |
 
 ## 4.1 排障（新人最常卡的三处）

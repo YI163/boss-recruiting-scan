@@ -1,8 +1,8 @@
 # boss-recruiting-scan
 
-BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP 驱动、防封节奏与配额、每 5 人一道人工审核闸门、判定口径可替换，附带 Windows 补丁与一份踩坑排查手册。
+BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP 驱动、防封节奏与配额、可选的两级审核（**点收藏前逐张审** / **批量停轮审**，默认纯脚本）、判定口径可替换，附带 Windows 补丁与一份踩坑排查手册。
 
-> A Claude/DSH-style skill for screening and bookmarking candidates on the BOSS Zhipin recruiter recommendation feed. CDP-driven, rate-limited, with a mandatory human-review gate every 5 bookmarks. Zero outreach by design.
+> A Claude/DSH-style skill for screening and bookmarking candidates on the BOSS Zhipin recruiter recommendation feed. CDP-driven and rate-limited, with two optional review modes (per-card review before bookmarking, or batch review every N bookmarks). Zero outreach by design.
 
 ## 最短用法（零基础，一句话 + 一句要求）
 
@@ -25,7 +25,7 @@ BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP �
 装好之后它自己会 clone、放进 skill 目录、起一个独立的调试 Chrome。你只需要做三件事：
 
 1. 在它打开的 Chrome 窗口里登录招聘端（**选「我要招聘」**，不是「我要找工作」）
-2. 每 5 个人它会停下来给你一份名单，你回「这批都行」或点名去掉谁
+2. 审核方式二选一：**边看边问**（提了软条件，它每张卡先问你/AI，过了才点收藏）或**批量停轮**（`BATCH_REVIEW=1`，每 5 人给你一份名单）；不说就纯脚本跑完
 3. 跑完看它出的台账（xlsx + md），自己再核一遍
 
 一句记不住就记这句：**「把这个仓库装成 skill，我要招<岗位+城市+年限+学历>，带我跑一轮。」**
@@ -51,8 +51,8 @@ BOSS 直聘招聘端「推荐牛人」的**批量筛人 + 收藏** skill：CDP �
 
 1. 连上你**自己已登录**的招聘端 Chrome（独立调试实例，不碰主窗口）
 2. 每轮读「推荐牛人」流的候选人卡片 → 交给判定器（默认 `scripts/judge.py`，可换 `judge_template.py`）
-3. 对 PASS 的人点「收藏」，每 5 人**强制停轮**，产出 `review_batch_N.json` 交你审核
-4. 审核不通过的人回滚（取消收藏）→ 最后出 xlsx + md 台账
+3. 对 PASS 的人点「收藏」；要审核就两种：`--soft-review`（**收藏前**逐张等你结论，被拒者根本没被收藏）或 `BATCH_REVIEW=1`（收藏后每 5 人停轮，产出 `review_batch_N.json`，被拒者需回滚）
+4. 走批量模式时把被拒的人回滚（取消收藏）→ 最后出 xlsx + md 台账
 
 ## 它不做什么（硬性边界，写进代码）
 
@@ -107,12 +107,13 @@ python scripts/judge.py --selftest                   # 默认判定器 12/12
 node scripts/scan-favorite.mjs --selfcheck-judge     # 判定器契约回归 6/6
 
 # 4) 联调：只判定不点收藏
-FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1 1
+FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1
 
-# 5) 正式：≤150 轮，收藏满 5 人自动停轮交审（exit 42）
-node scripts/scan-favorite.mjs 150 5
+# 5) 正式：收藏目标 5 人（每岗位看多少张由 SCAN_PER_JOB 控制，默认 100）
+node scripts/scan-favorite.mjs 5
+#    要收藏前逐张审：加 --soft-review；要收藏后每 5 人停轮：加 BATCH_REVIEW=1
 
-# 6) 审核后写 review_ok_1.json；只想接受审批用 --accept-only（不连浏览器、不再收藏人）
+# 6) 批量模式才需要：审核后写 review_ok_1.json；只想接受审批用 --accept-only（不连浏览器、不再收藏人）
 node scripts/scan-favorite.mjs --accept-only
 
 # 7) 出台账（不传 --out 就写到 $BOSS_WORK）
@@ -127,7 +128,7 @@ Windows 上的解释器、路径与冒烟验收见 [`boss-recruiting-scan/README
 ## 换岗位 / 换条件
 
 流程与口径解耦：`cp scripts/judge_template.py my_judge.py`，改 `CONFIG`（c1/c2/c3 关键词、排除词、月数门槛、城市优先级）即可，然后
-`JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 150 5`。
+node scripts/scan-favorite.mjs 5
 判定器契约、字段表与两个可运行示例见 [`references/custom-criteria.md`](boss-recruiting-scan/references/custom-criteria.md)。
 
 ## 两种连接方式
@@ -174,7 +175,7 @@ dev/                        排查用的探针脚本（我的原始调试 harnes
 
 ## 免责声明
 
-本项目只用于**你自己有权限的招聘账号**，且请遵守 BOSS 直聘的用户协议。内置的节奏下限、配额上限与每 5 人审核闸门，就是为了让批量操作不至于伤到账号、也不会在无人复核的情况下误收藏候选人。使用前请确认你所在司法辖区与平台规则允许这类自动化操作。
+本项目只用于**你自己有权限的招聘账号**，且请遵守 BOSS 直聘的用户协议。内置的节奏下限、配额上限与可选的审核闸门，就是为了让批量操作不至于伤到账号、也不会在无人复核的情况下误收藏候选人；**默认已经不再强制每 5 人停轮**，只有你显式 `BATCH_REVIEW=1` 才会。使用前请确认你所在司法辖区与平台规则允许这类自动化操作。
 
 ## License
 

@@ -35,8 +35,8 @@ FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1
 node scripts/scan-favorite.mjs 5
 ```
 
-**审核有两种模式，别混用**：默认是「先审后点」——`--soft-review` 时脚本每张卡写 `soft_pack.json`、等 agent 写 `soft_ok.json`，通过才收藏，被拒**根本没收藏**、不需要回滚。
-只有**批量模式**（`REVIEW_EVERY`，默认 5）才是「先收藏、每 N 人停轮送审」：脚本写 `review_batch_N.json` 并 `exit 42`，审核方逐人核三条件写 `review_ok_N.json`（`approved_card_ids` + `rejected_card_ids` 必须覆盖该批全部候选，digest 与 batch 一致），被拒的人先撤回：`node scripts/scan-favorite.mjs --rollback "真实姓名"`（`AUTO_ROLLBACK_REJECTED=1` 默认会自动取消）。
+**审核有三种状态，别混用**：默认是**纯脚本**（不逐张审、也不整批停，判定器过了就收藏）；提了软条件就加 `--soft-review`（先审后点）——脚本每张卡写 `soft_pack.json`、等 agent 写 `soft_ok.json`，通过才收藏，被拒**根本没收藏**、不需要回滚。
+只有**批量模式**（`BATCH_REVIEW=1` + `REVIEW_EVERY`，默认 5）才是「先收藏、每 N 人停轮送审」：脚本写 `review_batch_N.json` 并 `exit 42`，审核方逐人核三条件写 `review_ok_N.json`（`approved_card_ids` + `rejected_card_ids` 必须覆盖该批全部候选，digest 与 batch 一致），被拒的人先撤回：`node scripts/scan-favorite.mjs --rollback "真实姓名"`（`AUTO_ROLLBACK_REJECTED=1` 默认会自动取消）。
 不足 N 人想结批：`node scripts/scan-favorite.mjs --batch`；只接受审批不采集：`--accept-only`。
 
 ## 5. 台账
@@ -55,7 +55,9 @@ python3 scripts/make_ledger.py --work $BOSS_WORK --out . --title 招聘筛人台
 ## 7. 常用环境变量
 `CDP_URL`（默认 127.0.0.1:9333）、`BOSS_WORK`（默认 /tmp/boss）、`PYTHON_BIN`、`JUDGE_PY`、
 `SKILL_CONFIG`（复制 config.example.json 为 config.json 后生效）、`SPACING`、`FAV_GAP`、
-`FAV_DRY_RUN`、`APPLY_FILTER`（默认 1 重放筛选）、`FAV_OUT`。
+`FAV_DRY_RUN`、`APPLY_FILTER`（默认 1 重放筛选）、`FAV_OUT`、
+`SCAN_PER_JOB`（默认 100，每个岗位看多少张，<5 夹到 5）、`SOFT_REVIEW`/`--soft-review`（先审后点）、`SOFT_TIMEOUT_MIN`（默认 15 分钟，超时 exit 44）、
+`BATCH_REVIEW`（默认 0；批量模式总开关，与 `--soft-review` 互斥）、`REVIEW_EVERY`（默认 5，仅批量模式）、`AUTO_ROLLBACK_REJECTED`（默认 1，仅批量模式）、`JITTER_PCT`（默认 0.25）。
 
 
 ## 7.5 如果口径不是「留学 + 英语 + 名企职能」怎么办
@@ -63,12 +65,12 @@ python3 scripts/make_ledger.py --work $BOSS_WORK --out . --title 招聘筛人台
 流程层（扫描/开浮层/收藏/闸门/台账/配额）与口径无关，**只换判定层**：
 
 1. **改参数**：`cp scripts/judge_template.py my_judge.py`，改里面的 `CONFIG`（每段条件的关键词、排除词、`min_months`、城市偏好）和 `judge_card()`，然后
-   `JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 150 5`
+   `JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 5`
    模板自带卡片解析/日期月数/掩码/4 个输出，`python3 my_judge.py --selftest` → 5/5。
 2. **自己写判定器**：任何语言（非 Python 需设 `PYTHON_BIN=node|bash`），遵守契约即可——输入 `argv[1]` 的 JSONL（每行 `{"card":"..."}`），输出 `$BOSS_WORK/strict3v2_ok.json`（必填，缺则 FATAL），必填字段 `card_id/name/age/city/want/verdict/c1_months/c1_segments/c2_level/c2_evidence（c2_level 非 `none` 时必填）/c3_months/c3_segments`；姓名必须掩码；空输入/崩溃要非 0 退出，**不要**静默返回空数组；scan 会做 schema 校验并清理旧输出。
 3. 完整说明与示例见 `references/custom-criteria.md`。
 
-换完口径先 `node scripts/scan-favorite.mjs --selfcheck-judge`（6/6）再 `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 2 1` 试跑一轮，人工抽 3–5 张对账，再正式跑。
+换完口径先 `node scripts/scan-favorite.mjs --selfcheck-judge`（6/6）再 `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1` 试跑一轮，人工抽 3–5 张对账，再正式跑。
 
 ## 8. 排错
 - `FATAL fetch failed` → Chrome 调试端口没起或 CDP_URL 错

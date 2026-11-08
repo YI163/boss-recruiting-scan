@@ -31,7 +31,7 @@
 | ✅ | **硬条件由脚本判**（0 token、毫秒级） | m02871 | 铁律 7；`judge.py` |
 | ✅ | **软条件由 agent 判**（不是用户） | m02864 | 铁律 7；`references/soft-review-checklist.md` |
 | ✅ | 用户**没提**软条件 → 纯脚本跑完，**不需要二次检查** | m03147 | 两模式节；`--soft-review` 默认关 |
-| 📄 | 默认应「**先审后点**」：审核通过才收藏，不通过关详情看下一张 | m02822 / m02871 | 写了「事前审核模式」，但铁律 7 / Step 7 仍是「先收藏后闸门」的口径 → **本次改造重点** |
+| ✅ | 三种状态互斥：**默认纯脚本**（不审）；提了软条件 → `--soft-review` 先审后点（通过才收藏，不通过关详情看下一张）；要「先收藏回头再挑」→ `BATCH_REVIEW=1` 批量模式 | m02822 / m02871 / m03147 | 铁律 7、Step 7a/7b、README「审核的三种状态」表；代码 `SOFT_REVIEW` 与 `BATCH_REVIEW` 互斥（补丁 9 修复 F1） |
 | ✅ | 软条件超时不等于同意（`SOFT_TIMEOUT_MIN` 默认 15 分钟，超时 exit 44） | m03147 | 两模式节；`softAsk()` |
 | 🗄 | 「每收藏 N 个停轮送审 → 写 review_batch_N → exit 42」 | m02421 之前 | 批量模式仍保留（`REVIEW_EVERY`，默认 5、可设 1），但**已不是默认流程** |
 | 🗄 | 「被拒 → 自动取消收藏（AUTO_ROLLBACK_REJECTED）」 | m02421 | 同上，仅当走了「先收藏后审核」的批量模式才需要；先审后点时被拒者根本没被收藏 |
@@ -105,9 +105,9 @@
 |---|---|---|
 | 岗位轮转写进文档（来源=岗位下拉，不是 tab） | ✅ | SKILL.md 第 45 行段、README.md「岗位轮转与 SCAN_PER_JOB」、README-windows.md 补丁 8 节 |
 | SCAN_PER_JOB 语义（看≠收藏，默认 100，连续 3 次无新卡换岗） | ✅ | 同上；代码 const SCAN_PER_JOB = Math.max(5, num(process.env.SCAN_PER_JOB, 100)) |
-| --soft-review 先审后点写进文档 | ✅ | README.md「审核的两种方式」表 + soft_pack.json/soft_ok.json 示例；README-windows.md；	roubleshooting.md 第十一节 |
-| 消除「收藏前自动检查 vs 每 5 人自动审核」歧义 | ✅ | README.md/README-windows.md/	roubleshooting.md 三处对照表，均写明两模式互斥、eview_batch_N.json 只在批量模式产生 |
+| --soft-review 先审后点写进文档 | ✅ | README.md「审核的两种方式」表 + soft_pack.json/soft_ok.json 示例；README-windows.md；troubleshooting.md 第十一节 |
+| 消除「收藏前自动检查 vs 每 5 人自动审核」歧义 | ✅ | README.md/README-windows.md/troubleshooting.md 三处对照表，均写明两模式互斥、review_batch_N.json 只在批量模式产生 |
 | A 路线岗位读取/切换（listJobsA()/pickJobA()） | ✅ | scan-favorite.mjs transport；dry-run 实测两岗位各 15 张 |
 | A 路线登录闸门误判（/web/chat/index 被当成未登录） | ✅ | scripts/core/flow.mjs 改为只在 loggedIn===false 时 NOT_LOGGED_IN，否则 PROBE_NOT_READY |
-| A 路线滚动加载（原来滚窗口无效） | ✅ | 	ransport.scroll() 改为按 overflowY:auto/scroll 容器滚动，日志带 efore/after/sh/ch |
+| A 路线滚动加载（原来滚窗口无效） | ✅ | transport.scroll() 改为按 overflowY:auto/scroll 容器滚动，日志带 before/after/sh/ch |
 | 真收藏闭环（岗位在招） | ❌ 未验证 | 当前两个岗位都是「待」→ NO_FAV_CONTROL；需先发布岗位 |

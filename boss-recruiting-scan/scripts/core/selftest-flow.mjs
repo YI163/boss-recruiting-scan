@@ -21,7 +21,7 @@ const judge = (texts) => texts.map((text) => {
 
 function makeTransport(jobs, perJob, opts = {}) {
   const cards = new Map(jobs.map((j) => [j.key, mkCards(j.key, perJob)]));
-  let cur = null, shown = 0;
+  let cur = null, shown = 0; const selected = [];
   const t = {
     async probe() {
       if (!cur) return { ok: true, label: "", href: "https://www.zhipin.com/web/chat/recommend", loggedIn: true, cards: [] };
@@ -30,7 +30,7 @@ function makeTransport(jobs, perJob, opts = {}) {
       return { ok: true, label: `${cur} _ 深圳 10-11K`, href: "https://www.zhipin.com/web/chat/recommend", loggedIn: true, cards: vis };
     },
     async sources() { return jobs.map((j) => ({ key: j.key, label: j.label, text: j.text })); },
-    async selectSource(src) { cur = src.key; shown = opts.startShown ?? 15; return { label: `${cur} _ 深圳 10-11K` }; },
+    async selectSource(src) { selected.push(src.key); cur = src.key; shown = opts.startShown ?? 15; return { label: `${cur} _ 深圳 10-11K` }; },
     async openCard(c) {
       if (opts.noFavFor && String(c.name).includes(opts.noFavFor)) return { open: true, hasFav: false, favText: "", dialogText: "" };
       return { open: true, hasFav: true, favText: "收藏", dialogText: `${c.name} 详情` };
@@ -40,6 +40,7 @@ function makeTransport(jobs, perJob, opts = {}) {
     async scroll() { const all = cards.get(cur); shown = Math.min(all.length, shown + (opts.perScroll ?? 15)); return { cards: shown }; },
     async wait() {},
   };
+  t.selected = selected;
   return { t };
 }
 
@@ -145,6 +146,8 @@ const ok = (cond, msg) => { console.log(cond ? "ok  " : "FAIL", msg); if (!cond)
   const { t } = makeTransport(jobs, 60);
   const io = makeIo();
   const r = await runFlow({ t, io, cfg: { ...cfgBase, target: 1, scanPerJob: 50 } });
+  ok(!t.selected.includes("JX"), "selectSource 从未选中精选（这个断言能真失败）");
+  ok(!JSON.stringify(r.jobs[0] || {}).includes("精选"), "第一个来源不是精选");
   ok(r.jobs.length === 1, `精选来源被跳过（只跑了 ${r.jobs.length} 个来源）`);
   ok(r.faved === 1, `其他来源仍正常收藏（${r.faved}）`);
 }

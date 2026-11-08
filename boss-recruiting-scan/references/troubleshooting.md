@@ -192,9 +192,9 @@ https://static.zhipin.com/assets/sdk/apm/patas-compat.2.1.0.min.js
 
 ## 十一、「先审后点」还是「批量模式」——最容易被搞混的一对（本地补丁 8）
 
-这两件事**同一时间只会发生一件**，混用就会出现「我让他收藏前自动检查，skill 里却在每 5 个人自动审核」这种前后矛盾。对照表：
+这两件事**同一时间只会发生一件**，混用就会出现「我让他收藏前自动检查，skill 里却在每 5 个人自动审核」这种前后矛盾。对照表（**什么都不开 = 纯脚本，不审**；下面两列都是显式开启的选项）：
 
-| | 先审后点（默认） | 批量模式（可选） |
+| | 先审后点（可选，`--soft-review`） | 批量模式（可选，`BATCH_REVIEW=1`） |
 |---|---|---|
 | 谁决定 | agent 逐张判 | 人/agent 按批审 `review_batch_N.json` |
 | 触发开关 | `--soft-review` 或 `SOFT_REVIEW=1` | `BATCH_REVIEW=1` + `REVIEW_EVERY=N`（默认 5；与 `--soft-review` 互斥） |

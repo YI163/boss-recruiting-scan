@@ -163,7 +163,7 @@ export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-prima
 | `node scripts/scan-favorite.mjs --rollback "真实姓名"` | 取消收藏 + 清理 known_fav + 回退账本（真实姓名或 card_id 都行；全未命中时按 §4.1 用 known-cleanup） |
 | `node scripts/known-cleanup.mjs "$BOSS_WORK" "张**\|32" "张伟 32岁"` | 手工取消收藏后清理 known 残留 |
 | `node scripts/scan-favorite.mjs --judge-run cards.jsonl` | 只跑判定（不连浏览器，会覆盖 BOSS_WORK 的判定输出） |
-| `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（只验判定器输出格式，与审核频率无关；审核方式看「审核的两种方式」一节） |
+| `node scripts/scan-favorite.mjs --selfcheck-judge` | 判定器契约回归 6/6（只验判定器输出格式，与审核频率无关；审核方式看「审核的三种状态」一节） |
 | `FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1` | 联调：只判定不收藏 |
 | `node scripts/favcapture.mjs` | 抓收藏列表，区分 `this_round`（本轮）与 `historical_count`（历史） |
 | `python3 scripts/make_ledger.py --work $BOSS_WORK` | 台账 xlsx + md（`--out` 默认就是 `$BOSS_WORK`） |

@@ -69,9 +69,9 @@
 | ✅ | ego 可作为第二种运行方式；语义快照 + 跨 iframe 选择器点击（`>> nth=`） | m02999 | 「C 方案怎么用」 |
 | ✅ | ego 加 `--remote-debugging-port=9444` = 标准 CDP，可复用 A 的全流程 | m02999 | 两模式节的可选变体；`references/ego-integration.md` |
 | ✅ | ego 的 `nodejs -e` 不传 argv / 环境变量 → 命令必须走固定 JSON 文件 | 实测 | C 方案三硬约束 |
-| ✅ | ego 需要人时会把控制权交还，**agent 不得自行夺回**（要等用户明确要求再 `takeOverTaskSpace`） | 实测 | 文档没写 |
-| ✅ | ego 默认任务空间建在 `Profile 1`（从 Chrome 导入、v20 解不开，永远是登录失效）→ 必须显式 `profileId:"Profile"`（「您的 ego」） | 实测 | 文档没写 |
-| ✅ | ego 里登录一次即长期有效；别指望它跟 Chrome 共享登录态 | 实测 | 只在本轮对话说过，README 没写 |
+| ✅ | ego 需要人时会把控制权交还，**agent 不得自行夺回**（要等用户明确要求再 `takeOverTaskSpace`） | 实测 | `SKILL.md` C 方案硬约束 / `references/ego-integration.md` |
+| ✅ | ego 默认任务空间建在 `Profile 1`（从 Chrome 导入、v20 解不开，永远是登录失效）→ 必须显式 `profileId:"Profile"`（「您的 ego」） | 实测 | `SKILL.md` C 方案硬约束 / `references/ego-integration.md` |
+| ✅ | ego 里登录一次即长期有效；别指望它跟 Chrome 共享登录态 | 实测 | `SKILL.md` C 方案硬约束 / `references/ego-integration.md` |
 
 ## F. 交付与文档
 
@@ -96,7 +96,7 @@
 
 - 流程只有一份实现：`scripts/core/flow.mjs` 的 `runFlow({t, io, cfg})`；A（`scan-favorite.mjs`）与 C（`ego/ego-driver.mjs` 的 `round`）都只是 transport + io。
 - A 的主循环（原 170 行）已整段删除，改为 transport/io；tab（推荐/最新）映射成引擎的 source，`SCAN_PER_JOB`（默认 100）控制"每岗位看满多少张"。
-- 批量闸门挂在 `onFav`：每收藏一人写入 `pendingRecords`，累计到 `REVIEW_EVERY` 立即结批并 exit 42。
+- 批量闸门挂在 `onFav`（**仅 `BATCH_REVIEW=1`**）：每收藏一人写入 `pendingRecords`，累计到 `REVIEW_EVERY` 立即结批并 exit 42；纯脚本与先审后点不入队。
 - 回归：`--pacing-selftest` → PACING_OK；`--judge-run` 15 张 → JUDGE_OK；`--accept-only` fixture → accepted exit 0；真实 CDP 连接 + 安全闸门（未登录 → SECURITY STOP exit 2）通过。
 - 仍待验证：登录态下 A 的完整循环跑一轮（需要 9333 实例里重新登录）。
 ## 2026-11-08 追加：补丁 9.2（✅ 复核遗留全清）
@@ -109,6 +109,7 @@
 | ✅ | `pendingRecords` 只在批量模式累计（防跨模式串联） | `scan-favorite.mjs` `onFav` |
 | ✅ | 精选匹配精确化 + selftest 覆盖精选/掩码两场景 | `core/flow.mjs`、`core/selftest-flow.mjs` |
 | ✅ | requirements 台账过时 ❌ 与旧表名 | 本文件 |
+| ✅ | 第四轮 Minor（N9–N14）：表头/交叉引用/标题限定、selftest 断言可失败、旧状态迁移 | troubleshooting、README、criteria、selftest、`scan-favorite.mjs` `schemaVersion` |
 
 ## 2026-11-08 追加：补丁 8（✅ 已落地，文档 + A 路线代码）
 

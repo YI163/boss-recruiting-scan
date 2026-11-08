@@ -153,6 +153,15 @@ state.batchSeq = state.batchSeq || 0
 state.sinceBatch = state.sinceBatch || 0
 state.pendingRecords = state.pendingRecords || []
 const saveState = () => writeJSON(statePath, state)
+// 迁移（N8/N14）：9.1 及更早版本会把纯脚本/软审的收藏也写进 pendingRecords。
+// 只对旧状态（没有 schemaVersion）做一次性清理，避免之后开批量模式时被补送审。
+if (state.schemaVersion !== 2) {
+  const legacyPending = (state.pendingRecords || []).length
+  if (!BATCH_REVIEW && legacyPending) console.log('MIGRATE clear legacy pendingRecords', legacyPending)
+  if (!BATCH_REVIEW) state.pendingRecords = []
+  state.schemaVersion = 2
+  saveState()
+}
 
 const stopPath = path.join(BASE, 'STOP_TODAY')
 const restPath = path.join(BASE, 'REST_UNTIL')

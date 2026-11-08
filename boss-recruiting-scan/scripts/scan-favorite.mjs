@@ -252,6 +252,7 @@ if (MODE) {
 let TARGET_FAV = (() => {
   const pos = process.argv.slice(2).filter(a => !String(a).startsWith('-'))
   const n = Number(pos[pos.length - 1])
+  if (!MODE && pos.length && !(Number.isFinite(n) && n > 0)) { console.log('FATAL 收藏目标不是正整数：' + pos[pos.length - 1] + '（例：node scan-favorite.mjs 5）'); process.exit(2) }
   return Math.max(1, Math.round(Number.isFinite(n) && n > 0 ? n : 5))
 })()
 function targetFav() { return TARGET_FAV }

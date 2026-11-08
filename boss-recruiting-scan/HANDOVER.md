@@ -1,4 +1,4 @@
-# boss-recruiting-scan 交接说明（v1.8.2 + 本地补丁 8）
+# boss-recruiting-scan 交接说明（v1.8.2 + 本地补丁 9）
 
 在 BOSS 直聘**招聘端**「推荐牛人」页按约定口径筛候选人并点「收藏」的通用 skill。
 零外联：不发消息、不点「打招呼/联系Ta/搜索畅聊卡」，只有「收藏」一个动作。
@@ -31,7 +31,7 @@ export CDP_URL=http://127.0.0.1:9333 BOSS_WORK=/tmp/boss-<你的名字>   # 数�
 # 空转一轮（不点收藏，先确认判定正确）
 FAV_DRY_RUN=1 node scripts/scan-favorite.mjs 1
 
-# 正式（默认先审后点：提了软条件要加 --soft-review；收藏目标 5 人）
+# 正式（默认纯脚本、不审；提了软条件才加 --soft-review；收藏目标 5 人）
 node scripts/scan-favorite.mjs 5
 ```
 

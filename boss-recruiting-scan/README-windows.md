@@ -1,4 +1,4 @@
-# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁 8）
+# Windows 使用说明（boss-recruiting-scan v1.8.2 + 本地补丁 9）
 
 本 skill 的文档与默认值原本按 macOS 写（`/tmp/boss`、`python3`、osascript）。**流程、节奏、配额、审核闸门、判定口径一律未改**，Windows 适配只做了两件事：
 
@@ -170,7 +170,7 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 
 **补丁 4 追加两条（与平台无关）**：
 
-1. 不在「精选」页收藏——那页开聊要「搜索畅聊卡」（付费），卡片姓名还是加密掩码；`config.batch.tabs` 里写「精选」会被忽略（`WARN`），选来源时命中「精选」会打 `SKIP_SOURCE 精选页` 并跳过该来源。
+1. 不在「精选」页收藏——那页开聊要「搜索畅聊卡」（付费），卡片姓名还是加密掩码；`config.batch.tabs` 里写「精选」会被忽略（`WARN`），选来源时命中「精选」会打 `SKIP_SOURCE 精选页` 并跳过该来源（两条路线现在都用岗位下拉，天然不含精选）。
 2. 掩码姓名不收藏——推荐流卡片上是真实姓名（`.name`），判定器输出才是掩码；卡片姓名带 `*` 的候选直接 `SKIP 掩码姓名` 跳过，收藏成功写 `$BOSS_WORK\real_names.json` 供审核/台账/回滚使用。
 ## 补丁 8：审核方式、岗位轮转、每岗看多少张（Windows 版）
 
@@ -188,7 +188,8 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 $env:SOFT_TIMEOUT_MIN = "15"          # 超时按「没通过」处理，exit 44，绝不擅自收藏
 node scripts\scan-favorite.mjs --soft-review 5
 
-# 批量模式：收一个就停轮送审（仅此模式用 REVIEW_EVERY）
+# 批量模式：收一个就停轮送审（仅此模式用 REVIEW_EVERY；必须先开 BATCH_REVIEW）
+$env:BATCH_REVIEW = "1"
 $env:REVIEW_EVERY = "1"
 node scripts\scan-favorite.mjs 5
 node scripts\scan-favorite.mjs --accept-only     # 只接受审批，不需要浏览器

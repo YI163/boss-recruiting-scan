@@ -9,6 +9,8 @@
   },
   "batch": {
     "reviewEvery": 5,
+    "batchReview": 0,
+    "autoRollbackRejected": 1,
     "tabs": ["推荐", "最新"]
   }
 }

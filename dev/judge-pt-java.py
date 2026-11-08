@@ -6,7 +6,7 @@
 
     cp scripts/judge_template.py my_judge.py
     # 改 CONFIG 与 judge_card()
-    JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 150 5
+    JUDGE_PY=$PWD/my_judge.py node scripts/scan-favorite.mjs 5
 
 契约（scan-favorite.mjs 会做 schema 校验，不满足即 FATAL exit 2）
     输入：argv[1] = JSONL，每行 {"card": "<卡片 innerText>"}

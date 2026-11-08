@@ -179,6 +179,7 @@ node scripts/scan-favorite.mjs --judge-run C:\path\to\cards.jsonl
 | 方式 | 怎么开 | 审核发生在 | 被拒 |
 |---|---|---|---|
 | 纯脚本（默认） | 不加任何开关 | 不审 | — |
+| 先审后点（显式开启） | `--soft-review`（`SOFT_TIMEOUT_MIN` 默认 15 分钟） | 点收藏**之前**，每张都停 | 不收藏，关详情看下一张；超时按不通过，`exit 44` |
 | 批量模式（显式开启） | `BATCH_REVIEW=1` + `REVIEW_EVERY=N`（默认 5） | 收藏之后，每 N 人停轮 | `AUTO_ROLLBACK_REJECTED=1` 自动取消收藏 + 回退账本 |
 
 **用户没提软条件就不要加 `--soft-review`**（默认纯脚本，不产生批次文件）；想「先收藏、回头再挑」才加 `BATCH_REVIEW=1`。

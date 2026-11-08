@@ -69,9 +69,9 @@
 | ✅ | ego 可作为第二种运行方式；语义快照 + 跨 iframe 选择器点击（`>> nth=`） | m02999 | 「C 方案怎么用」 |
 | ✅ | ego 加 `--remote-debugging-port=9444` = 标准 CDP，可复用 A 的全流程 | m02999 | 两模式节的可选变体；`references/ego-integration.md` |
 | ✅ | ego 的 `nodejs -e` 不传 argv / 环境变量 → 命令必须走固定 JSON 文件 | 实测 | C 方案三硬约束 |
-| ❌ | ego 需要人时会把控制权交还，**agent 不得自行夺回**（要等用户明确要求再 `takeOverTaskSpace`） | 实测 | 文档没写 |
-| ❌ | ego 默认任务空间建在 `Profile 1`（从 Chrome 导入、v20 解不开，永远是登录失效）→ 必须显式 `profileId:"Profile"`（「您的 ego」） | 实测 | 文档没写 |
-| ❌ | ego 里登录一次即长期有效；别指望它跟 Chrome 共享登录态 | 实测 | 只在本轮对话说过，README 没写 |
+| ✅ | ego 需要人时会把控制权交还，**agent 不得自行夺回**（要等用户明确要求再 `takeOverTaskSpace`） | 实测 | 文档没写 |
+| ✅ | ego 默认任务空间建在 `Profile 1`（从 Chrome 导入、v20 解不开，永远是登录失效）→ 必须显式 `profileId:"Profile"`（「您的 ego」） | 实测 | 文档没写 |
+| ✅ | ego 里登录一次即长期有效；别指望它跟 Chrome 共享登录态 | 实测 | 只在本轮对话说过，README 没写 |
 
 ## F. 交付与文档
 
@@ -85,7 +85,7 @@
 
 ---
 
-## 本次要改的口径（把 🗄 与 ❌ 补上）
+## 本次要改的口径（已于补丁 9 全量落地）
 
 1. **默认是纯脚本**（规则判完直接收藏、不二次审）；**先审后点**要显式 `--soft-review`（审核在收藏之前，被拒者不收藏、不需要回滚）；**批量模式**（先收藏后闸门 + 自动回滚）要显式 `BATCH_REVIEW=1`，且与 `--soft-review` 互斥。
 2. **岗位重选**：每次 `Page.navigate` / 刷新后，先确认岗位标签，不是目标岗位就重选；没选到就停，不要拿错岗位的卡片乱点。
@@ -99,13 +99,24 @@
 - 批量闸门挂在 `onFav`：每收藏一人写入 `pendingRecords`，累计到 `REVIEW_EVERY` 立即结批并 exit 42。
 - 回归：`--pacing-selftest` → PACING_OK；`--judge-run` 15 张 → JUDGE_OK；`--accept-only` fixture → accepted exit 0；真实 CDP 连接 + 安全闸门（未登录 → SECURITY STOP exit 2）通过。
 - 仍待验证：登录态下 A 的完整循环跑一轮（需要 9333 实例里重新登录）。
+## 2026-11-08 追加：补丁 9.2（✅ 复核遗留全清）
+
+| 状态 | 项 | 落在哪 |
+|---|---|---|
+| ✅ | 默认口径写对（纯脚本，先审后点要显式开关） | SKILL/README/README-windows/HANDOVER/troubleshooting |
+| ✅ | 预览时 `REVIEW_EVERY` 必须配 `BATCH_REVIEW=1` | SKILL 已知坑、README-windows PowerShell 块 |
+| ✅ | 退出码表与代码一致（1/2/42/44） | `README.md` §4 |
+| ✅ | `pendingRecords` 只在批量模式累计（防跨模式串联） | `scan-favorite.mjs` `onFav` |
+| ✅ | 精选匹配精确化 + selftest 覆盖精选/掩码两场景 | `core/flow.mjs`、`core/selftest-flow.mjs` |
+| ✅ | requirements 台账过时 ❌ 与旧表名 | 本文件 |
+
 ## 2026-11-08 追加：补丁 8（✅ 已落地，文档 + A 路线代码）
 
 | 要求 | 状态 | 证据 |
 |---|---|---|
 | 岗位轮转写进文档（来源=岗位下拉，不是 tab） | ✅ | SKILL.md 第 45 行段、README.md「岗位轮转与 SCAN_PER_JOB」、README-windows.md 补丁 8 节 |
 | SCAN_PER_JOB 语义（看≠收藏，默认 100，连续 3 次无新卡换岗） | ✅ | 同上；代码 const SCAN_PER_JOB = Math.max(5, num(process.env.SCAN_PER_JOB, 100)) |
-| --soft-review 先审后点写进文档 | ✅ | README.md「审核的两种方式」表 + soft_pack.json/soft_ok.json 示例；README-windows.md；troubleshooting.md 第十一节 |
+| --soft-review 先审后点写进文档 | ✅ | README.md「审核的三种状态」表 + soft_pack.json/soft_ok.json 示例；README-windows.md；troubleshooting.md 第十一节 |
 | 消除「收藏前自动检查 vs 每 5 人自动审核」歧义 | ✅ | README.md/README-windows.md/troubleshooting.md 三处对照表，均写明两模式互斥、review_batch_N.json 只在批量模式产生 |
 | A 路线岗位读取/切换（listJobsA()/pickJobA()） | ✅ | scan-favorite.mjs transport；dry-run 实测两岗位各 15 张 |
 | A 路线登录闸门误判（/web/chat/index 被当成未登录） | ✅ | scripts/core/flow.mjs 改为只在 loggedIn===false 时 NOT_LOGGED_IN，否则 PROBE_NOT_READY |

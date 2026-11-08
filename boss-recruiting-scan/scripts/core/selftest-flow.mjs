@@ -25,7 +25,8 @@ function makeTransport(jobs, perJob, opts = {}) {
   const t = {
     async probe() {
       if (!cur) return { ok: true, label: "", href: "https://www.zhipin.com/web/chat/recommend", loggedIn: true, cards: [] };
-      const vis = cards.get(cur).slice(0, shown);
+      let vis = cards.get(cur).slice(0, shown);
+      if (opts.maskFirst && vis.length) vis = [{ ...vis[0], name: "王**" }, ...vis.slice(1)];
       return { ok: true, label: `${cur} _ 深圳 10-11K`, href: "https://www.zhipin.com/web/chat/recommend", loggedIn: true, cards: vis };
     },
     async sources() { return jobs.map((j) => ({ key: j.key, label: j.label, text: j.text })); },
@@ -136,6 +137,25 @@ const ok = (cond, msg) => { console.log(cond ? "ok  " : "FAIL", msg); if (!cond)
   const io = makeIo();
   const r = await runFlow({ t, io, cfg: cfgBase });
   ok(r.exit === 2, `未登录 exit=2（${r.exit}）`);
+}
+
+// 8) 精选来源 → SKIP_SOURCE 跳过，不选它
+{
+  const jobs = [{ key: "JX", label: "精选", text: "精选" }, ...JOBS];
+  const { t } = makeTransport(jobs, 60);
+  const io = makeIo();
+  const r = await runFlow({ t, io, cfg: { ...cfgBase, target: 1, scanPerJob: 50 } });
+  ok(r.jobs.length === 1, `精选来源被跳过（只跑了 ${r.jobs.length} 个来源）`);
+  ok(r.faved === 1, `其他来源仍正常收藏（${r.faved}）`);
+}
+
+// 9) 掩码姓名 → 开卡前跳过，记 masked-name
+{
+  const { t } = makeTransport(JOBS.slice(0, 1), 60, { maskFirst: true });
+  const io = makeIo();
+  const r = await runFlow({ t, io, cfg: { ...cfgBase, target: 5, scanPerJob: 100 } });
+  ok(io.decisions.some((d) => d.reason === "masked-name"), "decisions 有 masked-name");
+  ok(!io.favs.some((n) => String(n).includes("*")), "掩码姓名没有被收藏");
 }
 
 console.log(fails ? `\nSELFTEST FAILED (${fails})` : "\nSELFTEST OK");

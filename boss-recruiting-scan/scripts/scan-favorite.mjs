@@ -950,14 +950,14 @@ const io = {
     rn[c.cid] = c.name
     writeJSON(path.join(BASE, 'real_names.json'), rn)
     appendJSONL(path.join(BASE, 'passes.jsonl'), { ts: new Date().toISOString(), real_name: c.name, ...(brief || {}), card_id: c.cid, name: (brief && brief.name) || c.name, age: c.age })
-    state.pendingRecords.push({
+    if (BATCH_REVIEW) state.pendingRecords.push({
       card_id: c.cid, name: (brief && brief.name) || c.name, name_real: c.name, age: c.age,
       city: brief && brief.city, want: brief && brief.want, verdict: brief && brief.verdict,
       c1_months: brief && brief.c1_months, c1_segments: brief && brief.c1_segments,
       c2_level: brief && brief.c2_level, c2_evidence: brief && brief.c2_evidence,
       c3_months: brief && brief.c3_months, c3_segments: brief && brief.c3_segments, flags: brief && brief.flags,
     })
-    state.sinceBatch = (state.sinceBatch || 0) + 1
+    if (BATCH_REVIEW) state.sinceBatch = (state.sinceBatch || 0) + 1
     saveState()
     if (!FAV_DRY_RUN && BATCH_REVIEW && state.pendingRecords.length >= REVIEW_EVERY) writeReviewBatch(state.pendingRecords.slice(0, REVIEW_EVERY))
   },

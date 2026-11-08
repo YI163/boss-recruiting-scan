@@ -26,7 +26,7 @@
 | **先审后点**（显式开启） | 用户提了「软条件」、要求你逐张看 | `--soft-review`（`SOFT_TIMEOUT_MIN` 默认 15 分钟） | 点收藏**之前**，每张都停 | 不收藏，直接关详情看下一张；超时按不通过处理，`exit 44` |
 | **批量模式**（显式开启） | 明确说「先收藏、回头再挑」 | `BATCH_REVIEW=1` + `REVIEW_EVERY=N`（默认 5） | 收藏之后，每累计 N 人停轮 | `AUTO_ROLLBACK_REJECTED=1`（默认）自动取消收藏并回退账本 |
 
-**用户没提软条件 → 不要加 `--soft-review`**，默认就是纯脚本，不产生任何批次文件；想「先收藏、回头再挑」才加 `BATCH_REVIEW=1`。
+**用户没提软条件 → 不要加 `--soft-review`**，默认就是纯脚本，不产生任何批次文件；想「先收藏、回头再挑」才加 `BATCH_REVIEW=1`。**切模式不会补送审**：`pendingRecords` 只在批量模式累计，之前纯脚本/先审后点收藏过的人不会被翻出来重审。
 
 先审后点的软审文件（脚本写、agent 读）：
 
@@ -173,8 +173,8 @@ export PY=/path/to/python-with-openpyxl    # 例：~/.dsh/dsh-runtimes/dsh-prima
 | 码 | 含义 |
 |---|---|
 | 0 | 正常结束（达标/空跑） |
-| 1 | 致命错误 / 用法错误：`FATAL …`、`--rollback` 没给姓名、`FAV_DRY_RUN=1` 时拒绝回滚 |
-| 2 | 前置条件不满足：未登录（`NOT_LOGGED_IN`）、CDP 连不上、judge 失败或输出不合 schema、收藏目标不是数字、`--judge-run` 文件不存在、配额触发 |
+| 1 | 未捕获异常兜底与用法错误：`main()`/`rollback()` 的 `.catch` 兜底、`--rollback` 没给参数、`FAV_DRY_RUN=1` 时拒绝回滚 |
+| 2 | 脚本主动报错（多数带 `FATAL` 前缀）：config 解析失败、收藏目标不是正整数、未登录（`NOT_LOGGED_IN`）、CDP 连不上、judge/schema 失败、回滚全部未命中、`--judge-run` 文件不存在、配额触发 |
 | 44 | 软审超时（`SOFT_TIMEOUT_MIN` 内没等到 `soft_ok.json`）——按「不通过」处理，绝不擅自收藏 |
 | 42 | 到了审核闸门：先审 `review_batch_N.json`，写 `review_ok_N.json`，再继续 |
 

@@ -69,7 +69,7 @@ export async function runFlow({ t, io, cfg }) {
 
     const jxText = String(job.label || job.text || "").trim();
     // 只认精确的「精选」来源标签，避免误杀标题里带「精选」二字、但其实是正常岗位的条目
-    const isJX = jxText === "精选" || /[|｜/]\\s*精选\\s*$/.test(jxText);
+    const isJX = jxText === "精选" || /[|｜/]\s*精选\s*$/.test(jxText);
     if (isJX) { log("SKIP_SOURCE 精选页（开聊需搜索畅聊卡，不在精选页收藏）：" + jxText); continue; }
     const sel = await t.selectSource(job);
     log(`▶ 岗位：${sel.label || job.text || job.key}（计划看 ${C.scanPerJob} 张）`);
